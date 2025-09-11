@@ -482,24 +482,48 @@ func ClassifyText(text string) (ClassResult, error) {
 
 // ClassifyTextWithProbabilities classifies the provided text and returns the predicted class, confidence, and full probability distribution
 func ClassifyTextWithProbabilities(text string) (ClassResultWithProbs, error) {
+	if text == "" {
+		return ClassResultWithProbs{}, fmt.Errorf("text cannot be empty")
+	}
+
 	cText := C.CString(text)
+	if cText == nil {
+		return ClassResultWithProbs{}, fmt.Errorf("failed to allocate C string for text")
+	}
 	defer C.free(unsafe.Pointer(cText))
 
 	result := C.classify_text_with_probabilities(cText)
 
 	if result.class < 0 {
-		return ClassResultWithProbs{}, fmt.Errorf("failed to classify text with probabilities")
+		return ClassResultWithProbs{}, fmt.Errorf("classification failed: invalid class index %d", result.class)
 	}
 
-	// Convert C array to Go slice
+	if result.num_classes <= 0 {
+		return ClassResultWithProbs{}, fmt.Errorf("classification failed: invalid number of classes %d", result.num_classes)
+	}
+
+	// Convert C array to Go slice with safety checks
 	probabilities := make([]float32, int(result.num_classes))
 	if result.probabilities != nil && result.num_classes > 0 {
+		// Validate probability array bounds
+		if result.num_classes > 1000 { // Reasonable upper limit
+			log.Printf("Warning: unusually large number of classes: %d", result.num_classes)
+		}
+
 		probsSlice := (*[1 << 30]C.float)(unsafe.Pointer(result.probabilities))[:result.num_classes:result.num_classes]
 		for i, prob := range probsSlice {
 			probabilities[i] = float32(prob)
 		}
-		// Free the C-allocated memory
+
+		// Free the C-allocated memory with error handling
 		C.free_probabilities(result.probabilities, result.num_classes)
+		// Note: C free functions typically don't return errors, but we log the attempt
+		log.Printf("Debug: freed probability array of size %d", result.num_classes)
+	} else {
+		if result.probabilities == nil {
+			log.Printf("Warning: null probability array returned from classifier")
+		}
+		return ClassResultWithProbs{}, fmt.Errorf("classification failed: null or invalid probability array")
 	}
 
 	return ClassResultWithProbs{
@@ -659,24 +683,48 @@ func ClassifyModernBertText(text string) (ClassResult, error) {
 
 // ClassifyModernBertTextWithProbabilities classifies the provided text using ModernBERT and returns the predicted class, confidence, and full probability distribution
 func ClassifyModernBertTextWithProbabilities(text string) (ClassResultWithProbs, error) {
+	if text == "" {
+		return ClassResultWithProbs{}, fmt.Errorf("text cannot be empty")
+	}
+
 	cText := C.CString(text)
+	if cText == nil {
+		return ClassResultWithProbs{}, fmt.Errorf("failed to allocate C string for text")
+	}
 	defer C.free(unsafe.Pointer(cText))
 
 	result := C.classify_modernbert_text_with_probabilities(cText)
 
 	if result.class < 0 {
-		return ClassResultWithProbs{}, fmt.Errorf("failed to classify text with probabilities using ModernBERT")
+		return ClassResultWithProbs{}, fmt.Errorf("ModernBERT classification failed: invalid class index %d", result.class)
 	}
 
-	// Convert C array to Go slice
+	if result.num_classes <= 0 {
+		return ClassResultWithProbs{}, fmt.Errorf("ModernBERT classification failed: invalid number of classes %d", result.num_classes)
+	}
+
+	// Convert C array to Go slice with safety checks
 	probabilities := make([]float32, int(result.num_classes))
 	if result.probabilities != nil && result.num_classes > 0 {
+		// Validate probability array bounds
+		if result.num_classes > 1000 { // Reasonable upper limit
+			log.Printf("Warning: ModernBERT returned unusually large number of classes: %d", result.num_classes)
+		}
+
 		probsSlice := (*[1 << 30]C.float)(unsafe.Pointer(result.probabilities))[:result.num_classes:result.num_classes]
 		for i, prob := range probsSlice {
 			probabilities[i] = float32(prob)
 		}
-		// Free the C-allocated memory
+
+		// Free the C-allocated memory with error handling
 		C.free_modernbert_probabilities(result.probabilities, result.num_classes)
+		// Note: C free functions typically don't return errors, but we log the attempt
+		log.Printf("Debug: freed ModernBERT probability array of size %d", result.num_classes)
+	} else {
+		if result.probabilities == nil {
+			log.Printf("Warning: null probability array returned from ModernBERT classifier")
+		}
+		return ClassResultWithProbs{}, fmt.Errorf("ModernBERT classification failed: null or invalid probability array")
 	}
 
 	return ClassResultWithProbs{

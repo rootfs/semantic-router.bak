@@ -314,10 +314,81 @@ func (c *Classifier) ClassifyCategory(text string) (string, float64, error) {
 	return categoryName, float64(result.Confidence), nil
 }
 
-// ClassifyCategoryWithEntropy performs category classification with entropy-based reasoning decision
+// ClassifyCategoryWithEntropy performs category classification with entropy-based reasoning decision.
+//
+// This method extends traditional classification by analyzing the uncertainty in the model's
+// probability distribution to make intelligent reasoning mode decisions. It replaces the
+// simple confidence threshold approach with sophisticated entropy-based analysis.
+//
+// Process Flow:
+//
+// 1. Probability Distribution Extraction:
+//   - Calls the appropriate classifier (ModernBERT or Linear BERT)
+//   - Retrieves full softmax probability distribution (not just top prediction)
+//   - Validates probability distribution quality (sum=1.0, no negatives)
+//
+// 2. Category Mapping:
+//   - Maps class indices to human-readable category names
+//   - Handles missing category mappings gracefully
+//
+// 3. Reasoning Configuration:
+//   - Builds category reasoning map from configuration
+//   - Determines which categories prefer reasoning mode
+//
+// 4. Entropy-Based Analysis:
+//   - Calculates Shannon entropy of probability distribution
+//   - Determines uncertainty level (very_low to very_high)
+//   - Applies sophisticated reasoning strategies based on uncertainty
+//
+// 5. Metrics & Monitoring:
+//   - Records comprehensive entropy classification metrics
+//   - Validates probability distribution quality
+//   - Tracks reasoning decisions for monitoring
+//
+// 6. Decision Making:
+//   - Returns category name if confidence exceeds threshold
+//   - Returns empty string if below threshold (but still provides reasoning decision)
+//   - Always returns entropy-based reasoning recommendation
+//
+// Reasoning Strategies by Uncertainty Level:
+//   - Very High (≥0.8): Conservative default (enable reasoning)
+//   - High (0.6-0.8): Weighted decision from top categories
+//   - Medium (0.4-0.6): Trust top category preference
+//   - Low (<0.4): Trust classification confidence
+//
+// Args:
+//   - text: Input text to classify
+//
+// Returns:
+//   - categoryName: Predicted category name (empty if below confidence threshold)
+//   - confidence: Model's confidence score for the prediction
+//   - reasoningDecision: Entropy-based reasoning recommendation with full analysis
+//   - error: Classification error if any
+//
+// Example Usage:
+//
+//	category, conf, decision, err := classifier.ClassifyCategoryWithEntropy("What is machine learning?")
+//	if err != nil {
+//	    // Handle error
+//	}
+//	if decision.UseReasoning {
+//	    // Enable reasoning mode for this query
+//	}
 func (c *Classifier) ClassifyCategoryWithEntropy(text string) (string, float64, entropy.ReasoningDecision, error) {
 	if c.CategoryMapping == nil {
-		return "", 0.0, entropy.ReasoningDecision{}, fmt.Errorf("category mapping not initialized")
+		return "", 0.0, entropy.ReasoningDecision{}, entropy.NewEntropyError(
+			"classify_category_with_entropy",
+			entropy.ErrCategoryMappingMissing,
+			"classifier category mapping not initialized",
+		)
+	}
+
+	if text == "" {
+		return "", 0.0, entropy.ReasoningDecision{}, entropy.NewEntropyError(
+			"classify_category_with_entropy",
+			entropy.ErrInvalidProbabilities,
+			"input text is empty",
+		)
 	}
 
 	// Get full probability distribution
@@ -335,7 +406,15 @@ func (c *Classifier) ClassifyCategoryWithEntropy(text string) (string, float64, 
 	metrics.RecordClassifierLatency("category", time.Since(start).Seconds())
 
 	if err != nil {
-		return "", 0.0, entropy.ReasoningDecision{}, fmt.Errorf("classification error: %w", err)
+		modelType := "LinearBERT"
+		if c.Config.Classifier.CategoryModel.UseModernBERT {
+			modelType = "ModernBERT"
+		}
+		return "", 0.0, entropy.ReasoningDecision{}, entropy.NewEntropyError(
+			"classify_category_with_entropy",
+			entropy.ErrClassificationFailed,
+			fmt.Sprintf("%s classification failed: %v", modelType, err),
+		)
 	}
 
 	log.Printf("Classification result: class=%d, confidence=%.4f, entropy_available=%t",

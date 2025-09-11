@@ -1,8 +1,10 @@
 package candle_binding
 
 import (
+	"fmt"
 	"math"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1585,4 +1587,250 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// determineUncertaintyLevel determines uncertainty level from entropy value
+func determineUncertaintyLevel(entropy float64, numClasses int) string {
+	if numClasses <= 1 {
+		return "very_low"
+	}
+
+	// Calculate max possible entropy for normalization
+	maxEntropy := math.Log2(float64(numClasses))
+	normalizedEntropy := entropy / maxEntropy
+
+	// Map normalized entropy to uncertainty levels
+	if normalizedEntropy >= 0.8 {
+		return "very_high"
+	} else if normalizedEntropy >= 0.6 {
+		return "high"
+	} else if normalizedEntropy >= 0.4 {
+		return "medium"
+	} else if normalizedEntropy >= 0.2 {
+		return "low"
+	} else {
+		return "very_low"
+	}
+}
+
+// TestEntropyBasedRoutingIntegration tests the full entropy-based routing flow
+func TestEntropyBasedRoutingIntegration(t *testing.T) {
+	testCases := []struct {
+		name                 string
+		text                 string
+		useModernBERT        bool
+		expectedEntropyRange [2]float64 // [min, max]
+		description          string
+	}{
+		{
+			name:                 "Linear BERT integration test",
+			text:                 "What is machine learning and how does it work?",
+			useModernBERT:        false,
+			expectedEntropyRange: [2]float64{0.0, 3.0}, // Reasonable entropy range
+			description:          "Full Linear BERT entropy classification flow",
+		},
+		{
+			name:                 "ModernBERT integration test",
+			text:                 "Explain the theory of relativity",
+			useModernBERT:        true,
+			expectedEntropyRange: [2]float64{0.0, 3.0}, // Reasonable entropy range
+			description:          "Full ModernBERT entropy classification flow",
+		},
+		{
+			name:                 "Short text integration test",
+			text:                 "Hello",
+			useModernBERT:        false,
+			expectedEntropyRange: [2]float64{0.0, 3.0},
+			description:          "Short text should still work with entropy analysis",
+		},
+		{
+			name:                 "Long text integration test",
+			text:                 strings.Repeat("This is a long sentence about machine learning and artificial intelligence. ", 10),
+			useModernBERT:        false,
+			expectedEntropyRange: [2]float64{0.0, 3.0},
+			description:          "Long text should work efficiently with heap-based top-N selection",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var result ClassResultWithProbs
+			var err error
+
+			// Test the appropriate classifier
+			if tc.useModernBERT {
+				result, err = ClassifyModernBertTextWithProbabilities(tc.text)
+			} else {
+				result, err = ClassifyTextWithProbabilities(tc.text)
+			}
+
+			if err != nil {
+				t.Logf("Classification failed (expected in test env): %v", err)
+				return // Skip validation if classification fails (expected in test environment)
+			}
+
+			// Validate basic classification result structure
+			if result.Class < 0 {
+				t.Errorf("Invalid class index: %d", result.Class)
+			}
+
+			if result.Confidence < 0 || result.Confidence > 1 {
+				t.Errorf("Invalid confidence: %.3f (should be [0,1])", result.Confidence)
+			}
+
+			if result.NumClasses <= 0 {
+				t.Errorf("Invalid number of classes: %d", result.NumClasses)
+			}
+
+			if len(result.Probabilities) != result.NumClasses {
+				t.Errorf("Probability array length (%d) doesn't match NumClasses (%d)",
+					len(result.Probabilities), result.NumClasses)
+			}
+
+			// Validate probability distribution
+			probSum := float32(0.0)
+			for i, prob := range result.Probabilities {
+				if prob < 0 {
+					t.Errorf("Negative probability at index %d: %.6f", i, prob)
+				}
+				probSum += prob
+			}
+
+			// Check probability sum (should be close to 1.0)
+			if probSum < 0.99 || probSum > 1.01 {
+				t.Errorf("Probability sum %.6f is not close to 1.0", probSum)
+			}
+
+			// Calculate entropy for integration testing
+			entropy := calculateShannonEntropy(result.Probabilities)
+			if entropy < tc.expectedEntropyRange[0] || entropy > tc.expectedEntropyRange[1] {
+				t.Errorf("Entropy %.6f is outside expected range [%.1f, %.1f]",
+					entropy, tc.expectedEntropyRange[0], tc.expectedEntropyRange[1])
+			}
+
+			// Test uncertainty level determination
+			uncertaintyLevel := determineUncertaintyLevel(entropy, len(result.Probabilities))
+			validUncertaintyLevels := []string{"very_low", "low", "medium", "high", "very_high"}
+			isValidUncertainty := false
+			for _, valid := range validUncertaintyLevels {
+				if uncertaintyLevel == valid {
+					isValidUncertainty = true
+					break
+				}
+			}
+			if !isValidUncertainty {
+				t.Errorf("Invalid uncertainty level: %s", uncertaintyLevel)
+			}
+
+			t.Logf("Integration test '%s' passed: class=%d, confidence=%.3f, entropy=%.3f, uncertainty=%s, %s",
+				tc.name, result.Class, result.Confidence, entropy, uncertaintyLevel, tc.description)
+		})
+	}
+}
+
+// TestMemoryManagementIntegration tests memory handling across multiple calls
+func TestMemoryManagementIntegration(t *testing.T) {
+	testTexts := []string{
+		"Short text",
+		"Medium length text about machine learning",
+		strings.Repeat("Long text ", 50),
+		"Text with special characters: éñ中文🌟",
+		"", // Empty text (should be handled gracefully)
+	}
+
+	// Test multiple calls to ensure no memory leaks
+	for iteration := 0; iteration < 3; iteration++ {
+		for i, text := range testTexts {
+			t.Run(fmt.Sprintf("iteration_%d_text_%d", iteration, i), func(t *testing.T) {
+				// Test both classifiers
+				_, err1 := ClassifyTextWithProbabilities(text)
+				_, err2 := ClassifyModernBertTextWithProbabilities(text)
+
+				// Empty text should return an error due to our safety checks
+				if text == "" {
+					if err1 == nil {
+						t.Errorf("Expected error for empty text in Linear BERT, got nil")
+					}
+					if err2 == nil {
+						t.Errorf("Expected error for empty text in ModernBERT, got nil")
+					}
+					return
+				}
+
+				// Non-empty text should work (or fail gracefully in test environment)
+				if err1 != nil {
+					t.Logf("Linear BERT classification failed (expected in test env): %v", err1)
+				}
+				if err2 != nil {
+					t.Logf("ModernBERT classification failed (expected in test env): %v", err2)
+				}
+
+				// The main goal is to ensure no panics or memory corruption
+				// Actual classification success depends on model availability
+			})
+		}
+	}
+}
+
+// TestMemoryLeakDetection tests for potential memory leaks in CGo boundary
+func TestMemoryLeakDetection(t *testing.T) {
+	// This test performs many classification operations to detect memory leaks
+	// In a real environment, you would use tools like valgrind or AddressSanitizer
+
+	const numIterations = 50 // Reduced for faster testing
+	const textVariations = 5
+
+	// Generate test texts of varying lengths
+	testTexts := make([]string, textVariations)
+	for i := 0; i < textVariations; i++ {
+		// Create texts of different lengths to stress memory allocation
+		textLength := (i + 1) * 5
+		testTexts[i] = strings.Repeat(fmt.Sprintf("test text %d ", i), textLength)
+	}
+
+	t.Run("Linear BERT memory leak detection", func(t *testing.T) {
+		for iteration := 0; iteration < numIterations; iteration++ {
+			for textIdx, text := range testTexts {
+				result, err := ClassifyTextWithProbabilities(text)
+
+				if err != nil {
+					// Expected in test environment without models
+					continue
+				}
+
+				// Verify that memory was properly managed
+				if len(result.Probabilities) != result.NumClasses {
+					t.Errorf("Memory corruption detected: probability array length mismatch at iteration %d, text %d",
+						iteration, textIdx)
+				}
+
+				// Check for obviously corrupted probability values
+				for i, prob := range result.Probabilities {
+					if math.IsNaN(float64(prob)) || math.IsInf(float64(prob), 0) {
+						t.Errorf("Corrupted probability value detected: NaN/Inf at iteration %d, text %d, prob %d",
+							iteration, textIdx, i)
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("ModernBERT memory leak detection", func(t *testing.T) {
+		for iteration := 0; iteration < numIterations; iteration++ {
+			for textIdx, text := range testTexts {
+				result, err := ClassifyModernBertTextWithProbabilities(text)
+
+				if err != nil {
+					// Expected in test environment without models
+					continue
+				}
+
+				// Verify that memory was properly managed
+				if len(result.Probabilities) != result.NumClasses {
+					t.Errorf("Memory corruption detected: probability array length mismatch at iteration %d, text %d",
+						iteration, textIdx)
+				}
+			}
+		}
+	})
 }

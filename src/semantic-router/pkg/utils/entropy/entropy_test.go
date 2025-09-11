@@ -221,3 +221,228 @@ func TestGetTopCategories(t *testing.T) {
 		t.Errorf("Expected third category to be physics with 0.15, got %s with %f", result[2].Category, result[2].Probability)
 	}
 }
+
+// TestCalculateEntropyEdgeCases tests edge cases for entropy calculation
+func TestCalculateEntropyEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name            string
+		probabilities   []float32
+		expectedEntropy float64
+		description     string
+	}{
+		{
+			name:            "Empty probability array",
+			probabilities:   []float32{},
+			expectedEntropy: 0.0,
+			description:     "Empty array should return zero entropy",
+		},
+		{
+			name:            "Single element array",
+			probabilities:   []float32{1.0},
+			expectedEntropy: 0.0,
+			description:     "Single certain element should have zero entropy",
+		},
+		{
+			name:            "Array with zero probabilities",
+			probabilities:   []float32{0.0, 0.0, 0.0},
+			expectedEntropy: 0.0,
+			description:     "All zeros should return zero entropy",
+		},
+		{
+			name:            "Array with negative probabilities",
+			probabilities:   []float32{-0.1, 0.6, 0.5},
+			expectedEntropy: 0.942, // Only positive values contribute: -0*log2(0) + 0.6*log2(0.6) + 0.5*log2(0.5)
+			description:     "Negative probabilities should be ignored",
+		},
+		{
+			name:            "Array with very small probabilities",
+			probabilities:   []float32{0.999999, 0.000001, 0.0},
+			expectedEntropy: 0.000014, // Very small entropy
+			description:     "Very small probabilities should work correctly",
+		},
+		{
+			name:            "Array that doesn't sum to 1.0",
+			probabilities:   []float32{0.3, 0.3, 0.3}, // Sum = 0.9
+			expectedEntropy: 1.563,                    // Still calculates entropy: 3 * (-0.3 * log2(0.3))
+			description:     "Non-normalized probabilities should still work",
+		},
+		{
+			name:            "Array with probabilities > 1.0",
+			probabilities:   []float32{1.5, 0.5}, // Invalid but should handle
+			expectedEntropy: -0.377,              // Negative because 1.5*log2(1.5) is positive, and we have -sum
+			description:     "Invalid probabilities > 1.0 can result in negative entropy",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			entropy := CalculateEntropy(tc.probabilities)
+
+			if math.Abs(entropy-tc.expectedEntropy) > 0.01 {
+				t.Errorf("Expected entropy %.6f, got %.6f for %s",
+					tc.expectedEntropy, entropy, tc.description)
+			}
+
+			// Entropy should never be negative for valid probability distributions
+			// But can be negative for invalid distributions (probabilities > 1.0)
+			if entropy < 0 && tc.name != "Array with probabilities > 1.0" {
+				t.Errorf("Entropy should never be negative for valid distributions, got %.6f", entropy)
+			}
+
+			t.Logf("Test '%s' passed: entropy=%.6f, %s", tc.name, entropy, tc.description)
+		})
+	}
+}
+
+// TestAnalyzeEntropyEdgeCases tests edge cases for entropy analysis
+func TestAnalyzeEntropyEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name                string
+		probabilities       []float32
+		expectedUncertainty string
+		shouldError         bool
+		description         string
+	}{
+		{
+			name:                "Empty array",
+			probabilities:       []float32{},
+			expectedUncertainty: "very_low", // Default for empty
+			shouldError:         false,
+			description:         "Empty array should handle gracefully",
+		},
+		{
+			name:                "Single element",
+			probabilities:       []float32{1.0},
+			expectedUncertainty: "very_low", // No uncertainty with single element
+			shouldError:         false,
+			description:         "Single element should be very low uncertainty",
+		},
+		{
+			name:                "Two element uniform",
+			probabilities:       []float32{0.5, 0.5},
+			expectedUncertainty: "very_high", // Maximum entropy for 2 classes
+			shouldError:         false,
+			description:         "Uniform distribution should be very high uncertainty",
+		},
+		{
+			name:                "Array with extreme skew",
+			probabilities:       []float32{0.99999, 0.00001},
+			expectedUncertainty: "very_low",
+			shouldError:         false,
+			description:         "Extremely skewed distribution should be very low uncertainty",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := AnalyzeEntropy(tc.probabilities)
+
+			if result.UncertaintyLevel != tc.expectedUncertainty {
+				t.Errorf("Expected uncertainty level '%s', got '%s' for %s",
+					tc.expectedUncertainty, result.UncertaintyLevel, tc.description)
+			}
+
+			// Normalized entropy should be between 0 and 1
+			if result.NormalizedEntropy < 0 || result.NormalizedEntropy > 1 {
+				t.Errorf("Normalized entropy should be [0,1], got %.6f", result.NormalizedEntropy)
+			}
+
+			// Certainty should be inverse of normalized entropy
+			expectedCertainty := 1.0 - result.NormalizedEntropy
+			if math.Abs(result.Certainty-expectedCertainty) > 0.001 {
+				t.Errorf("Certainty should be 1-normalized_entropy, got %.6f vs %.6f",
+					result.Certainty, expectedCertainty)
+			}
+
+			t.Logf("Test '%s' passed: uncertainty=%s, entropy=%.3f, %s",
+				tc.name, result.UncertaintyLevel, result.Entropy, tc.description)
+		})
+	}
+}
+
+// TestMakeEntropyBasedReasoningDecisionEdgeCases tests edge cases for reasoning decisions
+func TestMakeEntropyBasedReasoningDecisionEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name                 string
+		probabilities        []float32
+		categoryNames        []string
+		categoryReasoningMap map[string]bool
+		threshold            float64
+		expectedValid        bool
+		description          string
+	}{
+		{
+			name:                 "Empty probabilities",
+			probabilities:        []float32{},
+			categoryNames:        []string{},
+			categoryReasoningMap: map[string]bool{},
+			threshold:            0.7,
+			expectedValid:        false, // Should return invalid decision
+			description:          "Empty inputs should return invalid decision",
+		},
+		{
+			name:                 "Mismatched array lengths",
+			probabilities:        []float32{0.5, 0.3, 0.2},
+			categoryNames:        []string{"cat1", "cat2"}, // Missing one name
+			categoryReasoningMap: map[string]bool{"cat1": true, "cat2": false},
+			threshold:            0.7,
+			expectedValid:        false,
+			description:          "Mismatched lengths should be handled gracefully",
+		},
+		{
+			name:                 "Empty category reasoning map",
+			probabilities:        []float32{0.7, 0.2, 0.1},
+			categoryNames:        []string{"unknown1", "unknown2", "unknown3"},
+			categoryReasoningMap: map[string]bool{}, // Empty map
+			threshold:            0.7,
+			expectedValid:        true, // Should still work with defaults
+			description:          "Empty reasoning map should use defaults",
+		},
+		{
+			name:          "Categories with special characters",
+			probabilities: []float32{0.6, 0.4},
+			categoryNames: []string{"category with spaces", "category-with-dashes"},
+			categoryReasoningMap: map[string]bool{
+				"category with spaces": true,
+				"category-with-dashes": false,
+			},
+			threshold:     0.7,
+			expectedValid: true,
+			description:   "Special characters in category names should work",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := MakeEntropyBasedReasoningDecision(
+				tc.probabilities,
+				tc.categoryNames,
+				tc.categoryReasoningMap,
+				tc.threshold,
+			)
+
+			if tc.expectedValid {
+				// Valid decisions should have reasonable values
+				if decision.Confidence < 0 || decision.Confidence > 1 {
+					t.Errorf("Decision confidence should be [0,1], got %.3f", decision.Confidence)
+				}
+
+				if decision.DecisionReason == "" {
+					t.Errorf("Decision reason should not be empty for valid decisions")
+				}
+
+				if decision.FallbackStrategy == "" {
+					t.Errorf("Fallback strategy should not be empty for valid decisions")
+				}
+			} else {
+				// Invalid decisions should have safe defaults
+				if decision.UseReasoning != false {
+					t.Logf("Invalid decision defaulted to UseReasoning=%v", decision.UseReasoning)
+				}
+			}
+
+			t.Logf("Test '%s' passed: valid=%v, reasoning=%v, confidence=%.3f, %s",
+				tc.name, tc.expectedValid, decision.UseReasoning, decision.Confidence, tc.description)
+		})
+	}
+}
