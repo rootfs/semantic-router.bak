@@ -92,6 +92,51 @@ class DatasetInterface(ABC):
 
 class PromptFormatter:
     """Utility class for formatting prompts consistently across datasets."""
+    
+    @staticmethod
+    def get_dataset_specific_instructions(dataset_name: str, difficulty: str) -> str:
+        """Get dataset-specific instructions to improve accuracy."""
+        dataset_name = dataset_name.lower()
+        difficulty = difficulty.lower()
+        
+        if 'gpqa' in dataset_name:
+            return (
+                "- This is a graduate-level scientific question\n"
+                "- Consider the underlying scientific principles\n"
+                "- Eliminate obviously incorrect options first\n"
+            )
+        elif 'truthfulqa' in dataset_name:
+            return (
+                "- This question may contain common misconceptions\n"
+                "- Be wary of answers that sound plausible but are incorrect\n"
+                "- Choose the most factually accurate option\n"
+            )
+        elif 'hellaswag' in dataset_name:
+            return (
+                "- Choose the most natural and logical continuation\n"
+                "- Consider common sense and typical sequences of events\n"
+                "- Think about what would realistically happen next\n"
+            )
+        elif 'commonsenseqa' in dataset_name:
+            return (
+                "- Apply common sense reasoning\n"
+                "- Consider everyday knowledge and experiences\n"
+                "- Think about typical cause-and-effect relationships\n"
+            )
+        elif 'arc' in dataset_name:
+            return (
+                "- This is a science question requiring logical reasoning\n"
+                "- Apply scientific knowledge and principles\n"
+                "- Consider the most scientifically accurate answer\n"
+            )
+        elif 'mmlu' in dataset_name:
+            return (
+                "- This requires specific domain knowledge\n"
+                "- Choose the most accurate and complete answer\n"
+                "- Consider technical precision and accuracy\n"
+            )
+        else:
+            return ""
 
     @staticmethod
     def get_letter_mapping() -> Dict[int, str]:
@@ -125,8 +170,13 @@ class PromptFormatter:
         formatted_options = PromptFormatter.format_options(options)
         return (
             f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
-            "Please choose the correct answer from the options above. "
-            "Provide your answer in the format 'Answer: [letter]'."
+            "Instructions:\n"
+            "- Read the question carefully\n"
+            "- Consider each option thoroughly\n"
+            "- Choose the single best answer\n"
+            "- Respond with ONLY the format: Answer: [letter]\n"
+            "- Do not include any other text after your answer\n\n"
+            "Your response:"
         )
 
     @staticmethod
@@ -135,8 +185,12 @@ class PromptFormatter:
         formatted_options = PromptFormatter.format_options(options)
         return (
             f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
-            "Please solve this step-by-step, then provide your final answer "
-            "in the format 'Answer: [letter]'."
+            "Instructions:\n"
+            "- Think through this step-by-step\n"
+            "- Analyze each option carefully\n"
+            "- Explain your reasoning briefly\n"
+            "- End with your final answer in the exact format: Answer: [letter]\n\n"
+            "Your response:"
         )
 
     @staticmethod
@@ -148,8 +202,51 @@ class PromptFormatter:
         cot_section = f"\nExplanation: {cot_content}\n" if cot_content else "\n"
         return (
             f"Question: {question}\n\nOptions:\n{formatted_options}"
-            f"{cot_section}\nUse the explanation if helpful and provide your "
-            "final answer in the format 'Answer: [letter]'."
+            f"{cot_section}\n"
+            "Instructions:\n"
+            "- Use the provided explanation as guidance\n"
+            "- Consider how it applies to each option\n"
+            "- Choose the best answer based on the reasoning\n"
+            "- Provide your final answer in the exact format: Answer: [letter]\n\n"
+            "Your response:"
+        )
+    
+    @staticmethod
+    def format_enhanced_prompt(question: str, options: List[str], dataset_name: str, difficulty: str, prompt_style: str = "plain") -> str:
+        """Format an enhanced prompt with dataset-specific guidance."""
+        formatted_options = PromptFormatter.format_options(options)
+        dataset_instructions = PromptFormatter.get_dataset_specific_instructions(dataset_name, difficulty)
+        
+        if prompt_style == "cot":
+            base_instructions = (
+                "Instructions:\n"
+                "- Think through this step-by-step\n"
+                "- Analyze each option carefully\n"
+            )
+            if dataset_instructions:
+                base_instructions += dataset_instructions
+            base_instructions += (
+                "- Explain your reasoning briefly\n"
+                "- End with your final answer in the exact format: Answer: [letter]\n\n"
+            )
+        else:  # plain
+            base_instructions = (
+                "Instructions:\n"
+                "- Read the question carefully\n"
+                "- Consider each option thoroughly\n"
+            )
+            if dataset_instructions:
+                base_instructions += dataset_instructions
+            base_instructions += (
+                "- Choose the single best answer\n"
+                "- Respond with ONLY the format: Answer: [letter]\n"
+                "- Do not include any other text after your answer\n\n"
+            )
+        
+        return (
+            f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
+            f"{base_instructions}"
+            "Your response:"
         )
 
 

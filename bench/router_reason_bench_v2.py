@@ -23,8 +23,10 @@ from dataset_interface import DatasetInfo, Question, questions_to_dataframe
 from openai import OpenAI
 from tqdm import tqdm
 
-# Answer extraction pattern
-ANSWER_PATTERN = re.compile(r"(?:answer(?:\sis)?:?\s*)([A-J])", re.IGNORECASE)
+# Enhanced answer extraction patterns
+ANSWER_PATTERN_PRIMARY = re.compile(r"(?:answer\s*:?\s*)([A-J])", re.IGNORECASE)
+ANSWER_PATTERN_FINAL = re.compile(r"(?:final\s*answer\s*:?\s*)([A-J])", re.IGNORECASE)
+ANSWER_PATTERN_CONCLUSION = re.compile(r"(?:therefore|thus|so).*?([A-J])", re.IGNORECASE)
 
 
 def parse_args():
@@ -139,8 +141,8 @@ def parse_args():
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=2048,
-        help="Maximum number of tokens to generate",
+        default=None,
+        help="Maximum number of tokens to generate (default: dataset-optimal)",
     )
     parser.add_argument(
         "--temperature",
@@ -164,6 +166,30 @@ def parse_args():
         ),
     )
     return parser.parse_args()
+
+
+def get_dataset_optimal_tokens(dataset_info):
+    """Get optimal token limit based on dataset characteristics."""
+    dataset_name = dataset_info.name.lower()
+    difficulty = dataset_info.difficulty_level.lower()
+    
+    # Dataset-specific token limits based on complexity and reasoning requirements
+    if 'gpqa' in dataset_name:
+        return 400  # Graduate-level complex reasoning
+    elif 'truthfulqa' in dataset_name:
+        return 250  # Nuanced, potentially tricky questions
+    elif 'mmlu' in dataset_name and difficulty == 'undergraduate':
+        return 150  # Professional knowledge, direct answers
+    elif dataset_name in ['hellaswag', 'arc', 'commonsenseqa']:
+        return 180  # Moderate reasoning required
+    else:
+        # Default based on difficulty level
+        if difficulty == 'hard' or difficulty == 'graduate':
+            return 300
+        elif difficulty == 'moderate':
+            return 200
+        else:
+            return 150
 
 
 def get_available_models(endpoint: str, api_key: str = "") -> List[str]:
@@ -215,12 +241,26 @@ def extract_answer(response: Any) -> Optional[str]:
         except Exception:
             response = str(response)
 
-    match = ANSWER_PATTERN.search(response)
-    if match:
-        return match.group(1).upper()
+    # Try multiple extraction patterns in order of preference
+    patterns = [ANSWER_PATTERN_PRIMARY, ANSWER_PATTERN_FINAL, ANSWER_PATTERN_CONCLUSION]
+    
+    for pattern in patterns:
+        match = pattern.search(response)
+        if match:
+            return match.group(1).upper()
+    
+    # Fallback 1: Look for standalone letters at end of response
+    lines = response.strip().split('\n')
+    for line in reversed(lines[-3:]):  # Check last 3 lines
+        line = line.strip()
+        if len(line) == 1 and line.upper() in "ABCDEFGHIJ":
+            return line.upper()
+    
+    # Fallback 2: Find last letter in entire response
     for char in reversed(response):
         if char.upper() in "ABCDEFGHIJ":
             return char.upper()
+    
     return None
 
 
@@ -241,7 +281,9 @@ def call_model(
             temperature=temperature,
             extra_body=extra_body if extra_body else None,
         )
-        text = response.choices[0].message.content
+        # For reasoning models, content might be in reasoning_content instead of content
+        message = response.choices[0].message
+        text = message.content or getattr(message, 'reasoning_content', None) or ""
         usage = getattr(response, "usage", None)
         prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
         completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
@@ -325,9 +367,13 @@ def process_question_single(
     end_time = time.time()
 
     predicted_answer = extract_answer(response_text) if success else None
-    is_correct = (
-        (predicted_answer == question.correct_answer) if predicted_answer else False
-    )
+    
+    # Convert predicted letter to index for comparison
+    if predicted_answer and predicted_answer in 'ABCDEFGHIJ':
+        predicted_idx = ord(predicted_answer) - ord('A')
+        is_correct = (predicted_idx == question.correct_answer)
+    else:
+        is_correct = False
 
     return {
         "mode": prompt_mode,
@@ -401,30 +447,37 @@ def evaluate_model_vllm_multimode(
     temperature: float,
     exec_modes: List[str],
 ) -> pd.DataFrame:
-    """Run vLLM with 3 realistic reasoning scenarios.
+    """Run vLLM with 2-3 realistic reasoning scenarios.
 
-    The 3 scenarios represent real-world router decision patterns:
-    1. NR - Plain prompt, no reasoning toggle (fast baseline)
-    2. XC - CoT prompt, no reasoning toggle (prompt-based reasoning)
-    3. NR_REASONING - Plain prompt, reasoning toggle ON (model-based reasoning)
+    The scenarios represent real-world router decision patterns:
+    1. NR - Plain prompt, no reasoning toggle (fast baseline) - ALWAYS included
+    2. XC - CoT prompt, no reasoning toggle (prompt-based reasoning) - ONLY if dataset has CoT
+    3. NR_REASONING - Plain prompt, reasoning toggle ON (model-based reasoning) - ALWAYS included
     """
     client = OpenAI(base_url=endpoint, api_key=api_key or "dummy-key")
     print(f"Using vLLM model: {model}, endpoint: {endpoint}")
 
+    # Check if dataset has actual CoT content by examining sample questions
+    has_cot_content = any(q.cot_content is not None and q.cot_content.strip() for q in questions[:10])
+    
+    if has_cot_content:
+        print(f"  Dataset has CoT content - using 3 modes: NR, XC, NR_REASONING")
+    else:
+        print(f"  Dataset lacks CoT content - using 2 modes: NR, NR_REASONING (skipping XC)")
+
     results: List[Dict[str, Any]] = []
 
-    # Define 3 realistic mode variants: (label, prompt_mode, reasoning_flag)
-    # For DeepSeek and Qwen3 models, explicitly set reasoning flags for all modes
+    # Define mode variants based on model type and CoT availability
     model_lower = model.lower()
     is_deepseek_or_qwen = (
         (("ds" in model_lower) or ("deepseek" in model_lower))
         and ("v31" in model_lower or "v3.1" in model_lower or "v3" in model_lower)
     ) or ("qwen3" in model_lower)
 
+    # Base modes (always included)
     if is_deepseek_or_qwen:
         mode_variants: List[Tuple[str, str, Optional[bool]]] = [
             ("VLLM_NR", "NR", False),  # Plain prompt, reasoning OFF (baseline)
-            ("VLLM_XC", "XC", False),  # CoT prompt, reasoning OFF (prompt reasoning)
             (
                 "VLLM_NR_REASONING",
                 "NR",
@@ -434,13 +487,19 @@ def evaluate_model_vllm_multimode(
     else:
         mode_variants: List[Tuple[str, str, Optional[bool]]] = [
             ("VLLM_NR", "NR", None),  # Plain prompt, no toggle (baseline)
-            ("VLLM_XC", "XC", None),  # CoT prompt, no toggle (prompt reasoning)
             (
                 "VLLM_NR_REASONING",
                 "NR",
                 True,
-            ),  # Plain prompt, toggle ON (model reasoning)
+            ),  # Plain prompt, reasoning toggle ON (model reasoning)
         ]
+    
+    # Add XC mode only if dataset has CoT content
+    if has_cot_content:
+        if is_deepseek_or_qwen:
+            mode_variants.insert(1, ("VLLM_XC", "XC", False))  # Insert between NR and NR_REASONING
+        else:
+            mode_variants.insert(1, ("VLLM_XC", "XC", None))  # Insert between NR and NR_REASONING
 
     def run_variants(q: Question) -> List[Dict[str, Any]]:
         local_records: List[Dict[str, Any]] = []
@@ -698,6 +757,14 @@ def main():
     print(f"Router models: {router_models}")
     print(f"vLLM models: {vllm_models}")
 
+    # Determine optimal token limit for this dataset
+    if args.max_tokens:
+        optimal_tokens = args.max_tokens
+        print(f"Using user-specified max_tokens: {optimal_tokens}")
+    else:
+        optimal_tokens = get_dataset_optimal_tokens(dataset_info)
+        print(f"Using dataset-optimal max_tokens: {optimal_tokens} (for {dataset_info.name})")
+
     # Router evaluation (NR-only)
     if args.run_router and router_endpoint and router_models:
         for model in router_models:
@@ -709,7 +776,7 @@ def main():
                 endpoint=router_endpoint,
                 api_key=router_api_key,
                 concurrent_requests=args.concurrent_requests,
-                max_tokens=args.max_tokens,
+                max_tokens=optimal_tokens,
                 temperature=args.temperature,
             )
             analysis = analyze_results(rt_df)
@@ -732,7 +799,7 @@ def main():
                 endpoint=vllm_endpoint,
                 api_key=vllm_api_key,
                 concurrent_requests=args.concurrent_requests,
-                max_tokens=args.max_tokens,
+                max_tokens=optimal_tokens,
                 temperature=args.temperature,
                 exec_modes=args.vllm_exec_modes,
             )

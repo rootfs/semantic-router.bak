@@ -12,13 +12,16 @@ from dataset_implementations.arc_dataset import (
     ARCDataset,
     ARCEasyDataset,
 )
+from dataset_implementations.commonsenseqa_dataset import CommonsenseQADataset
 from dataset_implementations.gpqa_dataset import (
     GPQADataset,
     GPQADiamondDataset,
     GPQAExtendedDataset,
     GPQAMainDataset,
 )
+from dataset_implementations.hellaswag_dataset import HellaSwagDataset
 from dataset_implementations.mmlu_dataset import MMLUDataset
+from dataset_implementations.truthfulqa_dataset import TruthfulQADataset
 from dataset_interface import DatasetInterface
 
 
@@ -97,6 +100,11 @@ DatasetFactory.register_dataset("gpqa", GPQAMainDataset)
 DatasetFactory.register_dataset("gpqa-main", GPQAMainDataset)
 DatasetFactory.register_dataset("gpqa-extended", GPQAExtendedDataset)
 DatasetFactory.register_dataset("gpqa-diamond", GPQADiamondDataset)
+
+# Register hard reasoning datasets
+DatasetFactory.register_dataset("truthfulqa", TruthfulQADataset)
+DatasetFactory.register_dataset("commonsenseqa", CommonsenseQADataset)
+DatasetFactory.register_dataset("hellaswag", HellaSwagDataset)
 
 
 

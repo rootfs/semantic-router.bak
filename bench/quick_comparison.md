@@ -57,8 +57,11 @@ python3 router_reason_bench_v2.py \
 - `arc-challenge` - ARC Challenge questions only  
 - `mmlu` / `mmlu-pro` - MMLU-Pro dataset (14 categories)
 - `gpqa` / `gpqa-main` - GPQA Main dataset (graduate-level)
-- `gpqa-extended` - GPQA Extended dataset
+- `gpqa-extended` - GPQA Extended dataset  
 - `gpqa-diamond` - GPQA Diamond dataset (highest quality)
+- `truthfulqa` - TruthfulQA dataset (6 categories, tests truthfulness)
+- `commonsenseqa` - CommonsenseQA dataset (9 categories, tests reasoning)
+- `hellaswag` - HellaSwag dataset (192 categories, tests commonsense)
 
 ## 📊 Example Usage
 

@@ -303,12 +303,12 @@ class ARCDataset(DatasetInterface):
     def format_prompt(self, question: Question, prompt_style: str = "plain") -> str:
         """Format ARC question into prompt."""
         if prompt_style == "plain":
-            return PromptFormatter.format_plain_prompt(
-                question.question, question.options
+            return PromptFormatter.format_enhanced_prompt(
+                question.question, question.options, "ARC", "mixed", "plain"
             )
         elif prompt_style == "cot":
-            return PromptFormatter.format_cot_prompt(
-                question.question, question.options
+            return PromptFormatter.format_enhanced_prompt(
+                question.question, question.options, "ARC", "mixed", "cot"
             )
         elif prompt_style == "explicit_cot":
             # ARC doesn't have CoT content, so fall back to regular CoT
