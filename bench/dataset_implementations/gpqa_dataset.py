@@ -119,29 +119,31 @@ class GPQADataset(DatasetInterface):
                 correct_answer_text = str(row["Answer"])
             elif "answer" in row and pd.notna(row["answer"]):
                 correct_answer_text = str(row["answer"])
-            
+
             # Collect all answer options
             incorrect_answers = []
             for i in [1, 2, 3]:
                 col_name = f"Incorrect Answer {i}"
                 if col_name in row and pd.notna(row[col_name]):
                     incorrect_answers.append(str(row[col_name]))
-            
+
             # Create options list with correct answer in random position
             if correct_answer_text and incorrect_answers:
                 options = incorrect_answers + [correct_answer_text]
                 random.shuffle(options)  # Randomize order
-                correct_answer = options.index(correct_answer_text)  # Find index after shuffle
+                correct_answer = options.index(
+                    correct_answer_text
+                )  # Find index after shuffle
             else:
                 # Fallback: try other formats
                 options = []
                 correct_answer = None
-                
+
                 # Try to extract from individual option columns (A, B, C, D)
                 for letter in ["A", "B", "C", "D"]:
                     if letter in row and pd.notna(row[letter]):
                         options.append(str(row[letter]))
-                
+
                 if options and correct_answer_text:
                     # Try to find correct answer in options
                     try:
@@ -165,7 +167,7 @@ class GPQADataset(DatasetInterface):
             # Skip questions without proper multiple choice format
             if not options or correct_answer is None:
                 continue
-                
+
             question = Question(
                 question_id=str(row.get("Record ID", f"gpqa_{len(questions)}")),
                 category=category,

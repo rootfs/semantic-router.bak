@@ -44,12 +44,12 @@ class HellaSwagDataset(DatasetInterface):
             # Load train and validation splits
             train_dataset = load_dataset("hellaswag", split="train")
             val_dataset = load_dataset("hellaswag", split="validation")
-            
+
             # Combine both splits for more data
             train_df = pd.DataFrame(train_dataset)
             val_df = pd.DataFrame(val_dataset)
             self._dataset_cache = pd.concat([train_df, val_df], ignore_index=True)
-            
+
         except Exception as e:
             print(f"Warning: Could not load HellaSwag dataset: {e}")
             print("You may need to check your internet connection or dataset access.")
@@ -62,33 +62,33 @@ class HellaSwagDataset(DatasetInterface):
         """Extract categories from HellaSwag dataset using activity labels."""
         if df.empty:
             return []
-            
+
         # Use activity_label as categories, but clean them up
         def clean_activity_label(label: str) -> str:
             """Clean up activity labels to make them more readable."""
             # Remove underscores and capitalize properly
-            cleaned = label.replace('_', ' ').title()
-            
+            cleaned = label.replace("_", " ").title()
+
             # Handle some common cases
             replacements = {
-                'Tv': 'TV',
-                'Diy': 'DIY',
-                'Atv': 'ATV',
-                'Bmx': 'BMX',
-                'Sumo': 'Sumo Wrestling',
-                'Mma': 'MMA',
+                "Tv": "TV",
+                "Diy": "DIY",
+                "Atv": "ATV",
+                "Bmx": "BMX",
+                "Sumo": "Sumo Wrestling",
+                "Mma": "MMA",
             }
-            
+
             for old, new in replacements.items():
                 cleaned = cleaned.replace(old, new)
-                
+
             return cleaned
-        
+
         # Add cleaned category column
-        if 'category' not in df.columns:
-            df['category'] = df['activity_label'].apply(clean_activity_label)
-        
-        return sorted(df['category'].unique().tolist())
+        if "category" not in df.columns:
+            df["category"] = df["activity_label"].apply(clean_activity_label)
+
+        return sorted(df["category"].unique().tolist())
 
     def get_available_categories(self) -> List[str]:
         """Get all available categories in the dataset."""
@@ -105,7 +105,7 @@ class HellaSwagDataset(DatasetInterface):
     ) -> Tuple[List[Question], DatasetInfo]:
         """Load HellaSwag dataset with filtering and sampling."""
         df = self._load_raw_dataset()
-        
+
         if df.empty:
             return [], DatasetInfo(
                 name=self.dataset_name,
@@ -133,7 +133,9 @@ class HellaSwagDataset(DatasetInterface):
             for category in df["category"].unique():
                 category_df = df[df["category"] == category]
                 if len(category_df) > samples_per_category:
-                    sampled_df = category_df.sample(samples_per_category, random_state=seed)
+                    sampled_df = category_df.sample(
+                        samples_per_category, random_state=seed
+                    )
                     sampled_dfs.append(sampled_df)
                 else:
                     sampled_dfs.append(category_df)
@@ -146,7 +148,7 @@ class HellaSwagDataset(DatasetInterface):
             context = row["ctx"]  # This is the full context (ctx_a + ctx_b combined)
             endings = row["endings"]  # List of 4 possible endings
             correct_idx = int(str(row["label"]))  # Convert string label to int (0-3)
-            
+
             question = Question(
                 question_id=f"hellaswag_{row['ind']}",
                 question=f"Context: {context}\n\nWhat happens next?",
@@ -171,7 +173,7 @@ class HellaSwagDataset(DatasetInterface):
     def format_prompt(self, question: Question, style: str = "plain") -> str:
         """Format a question into a prompt."""
         formatter = PromptFormatter()
-        
+
         if style == "plain":
             return formatter.format_enhanced_prompt(
                 question.question, question.options, "HellaSwag", "moderate", "plain"
@@ -195,7 +197,7 @@ class HellaSwagPromptFormatter(PromptFormatter):
         """Format a plain prompt for HellaSwag."""
         formatted_options = ""
         for i, option in enumerate(options):
-            letter = chr(ord('A') + i)
+            letter = chr(ord("A") + i)
             formatted_options += f"{letter}) {option}\n"
 
         prompt = (
@@ -210,7 +212,7 @@ class HellaSwagPromptFormatter(PromptFormatter):
         """Format a chain-of-thought prompt for HellaSwag."""
         formatted_options = ""
         for i, option in enumerate(options):
-            letter = chr(ord('A') + i)
+            letter = chr(ord("A") + i)
             formatted_options += f"{letter}) {option}\n"
 
         prompt = (

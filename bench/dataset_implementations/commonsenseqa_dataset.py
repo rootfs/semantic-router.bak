@@ -44,12 +44,12 @@ class CommonsenseQADataset(DatasetInterface):
             # Load train and validation splits
             train_dataset = load_dataset("commonsense_qa", split="train")
             val_dataset = load_dataset("commonsense_qa", split="validation")
-            
+
             # Combine both splits for more data
             train_df = pd.DataFrame(train_dataset)
             val_df = pd.DataFrame(val_dataset)
             self._dataset_cache = pd.concat([train_df, val_df], ignore_index=True)
-            
+
         except Exception as e:
             print(f"Warning: Could not load CommonsenseQA dataset: {e}")
             print("You may need to check your internet connection or dataset access.")
@@ -62,54 +62,100 @@ class CommonsenseQADataset(DatasetInterface):
         """Extract categories from CommonsenseQA dataset based on question concepts."""
         if df.empty:
             return []
-            
+
         # Use question_concept as the basis for categorization
-        concepts = df['question_concept'].unique()
-        
+        concepts = df["question_concept"].unique()
+
         # Group related concepts into broader categories
         def categorize_concept(concept: str) -> str:
             concept_lower = concept.lower()
-            
+
             # Physical objects and materials
-            if any(word in concept_lower for word in ['tool', 'object', 'material', 'container', 'furniture', 'clothing', 'food']):
+            if any(
+                word in concept_lower
+                for word in [
+                    "tool",
+                    "object",
+                    "material",
+                    "container",
+                    "furniture",
+                    "clothing",
+                    "food",
+                ]
+            ):
                 return "Physical Objects"
-            
+
             # Human activities and behaviors
-            elif any(word in concept_lower for word in ['activity', 'action', 'behavior', 'work', 'play', 'exercise']):
+            elif any(
+                word in concept_lower
+                for word in [
+                    "activity",
+                    "action",
+                    "behavior",
+                    "work",
+                    "play",
+                    "exercise",
+                ]
+            ):
                 return "Human Activities"
-            
+
             # Locations and places
-            elif any(word in concept_lower for word in ['place', 'location', 'building', 'room', 'area', 'space']):
+            elif any(
+                word in concept_lower
+                for word in ["place", "location", "building", "room", "area", "space"]
+            ):
                 return "Places & Locations"
-            
+
             # Emotions and mental states
-            elif any(word in concept_lower for word in ['emotion', 'feeling', 'mental', 'mind', 'thought', 'mood']):
+            elif any(
+                word in concept_lower
+                for word in ["emotion", "feeling", "mental", "mind", "thought", "mood"]
+            ):
                 return "Emotions & Mental States"
-            
+
             # Social and relationships
-            elif any(word in concept_lower for word in ['people', 'person', 'social', 'relationship', 'family', 'friend']):
+            elif any(
+                word in concept_lower
+                for word in [
+                    "people",
+                    "person",
+                    "social",
+                    "relationship",
+                    "family",
+                    "friend",
+                ]
+            ):
                 return "Social & Relationships"
-            
+
             # Time and events
-            elif any(word in concept_lower for word in ['time', 'event', 'occasion', 'period', 'moment']):
+            elif any(
+                word in concept_lower
+                for word in ["time", "event", "occasion", "period", "moment"]
+            ):
                 return "Time & Events"
-            
+
             # Animals and nature
-            elif any(word in concept_lower for word in ['animal', 'nature', 'plant', 'wildlife', 'creature']):
+            elif any(
+                word in concept_lower
+                for word in ["animal", "nature", "plant", "wildlife", "creature"]
+            ):
                 return "Animals & Nature"
-            
+
             # Abstract concepts
-            elif any(word in concept_lower for word in ['concept', 'idea', 'principle', 'theory', 'abstract']):
+            elif any(
+                word in concept_lower
+                for word in ["concept", "idea", "principle", "theory", "abstract"]
+            ):
                 return "Abstract Concepts"
-            
+
             else:
                 return "General Knowledge"
-        
+
         # Add category column to dataframe
-        if 'category' not in df.columns:
-            df['category'] = df['question_concept'].apply(categorize_concept)
-        
-        return sorted(df['category'].unique().tolist())
+        if "category" not in df.columns:
+            df["category"] = df["question_concept"].apply(categorize_concept)
+
+        return sorted(df["category"].unique().tolist())
 
     def get_available_categories(self) -> List[str]:
         """Get all available categories in the dataset."""
@@ -126,7 +172,7 @@ class CommonsenseQADataset(DatasetInterface):
     ) -> Tuple[List[Question], DatasetInfo]:
         """Load CommonsenseQA dataset with filtering and sampling."""
         df = self._load_raw_dataset()
-        
+
         if df.empty:
             return [], DatasetInfo(
                 name=self.dataset_name,
@@ -154,7 +200,9 @@ class CommonsenseQADataset(DatasetInterface):
             for category in df["category"].unique():
                 category_df = df[df["category"] == category]
                 if len(category_df) > samples_per_category:
-                    sampled_df = category_df.sample(samples_per_category, random_state=seed)
+                    sampled_df = category_df.sample(
+                        samples_per_category, random_state=seed
+                    )
                     sampled_dfs.append(sampled_df)
                 else:
                     sampled_dfs.append(category_df)
@@ -167,11 +215,11 @@ class CommonsenseQADataset(DatasetInterface):
             choices = row["choices"]
             choice_texts = choices["text"]
             choice_labels = choices["label"]  # ['A', 'B', 'C', 'D', 'E']
-            
+
             # Find correct answer index
             answer_key = row["answerKey"]
             correct_idx = choice_labels.index(answer_key)
-            
+
             question = Question(
                 question_id=row["id"],
                 question=row["question"],
@@ -196,7 +244,7 @@ class CommonsenseQADataset(DatasetInterface):
     def format_prompt(self, question: Question, style: str = "plain") -> str:
         """Format a question into a prompt."""
         formatter = PromptFormatter()
-        
+
         if style == "plain":
             return formatter.format_enhanced_prompt(
                 question.question, question.options, "CommonsenseQA", "hard", "plain"
@@ -220,7 +268,7 @@ class CommonsenseQAPromptFormatter(PromptFormatter):
         """Format a plain prompt for CommonsenseQA."""
         formatted_options = ""
         for i, option in enumerate(options):
-            letter = chr(ord('A') + i)
+            letter = chr(ord("A") + i)
             formatted_options += f"{letter}) {option}\n"
 
         prompt = (
@@ -235,7 +283,7 @@ class CommonsenseQAPromptFormatter(PromptFormatter):
         """Format a chain-of-thought prompt for CommonsenseQA."""
         formatted_options = ""
         for i, option in enumerate(options):
-            letter = chr(ord('A') + i)
+            letter = chr(ord("A") + i)
             formatted_options += f"{letter}) {option}\n"
 
         prompt = (

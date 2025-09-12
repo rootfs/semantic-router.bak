@@ -2,7 +2,7 @@
 ARC Dataset Implementation
 
 AI2 Reasoning Challenge for elementary and middle school science questions
-with automatic subject categorization across Biology, Chemistry, Physics, 
+with automatic subject categorization across Biology, Chemistry, Physics,
 Earth Science, and General Science.
 """
 

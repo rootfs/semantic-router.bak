@@ -107,7 +107,6 @@ DatasetFactory.register_dataset("commonsenseqa", CommonsenseQADataset)
 DatasetFactory.register_dataset("hellaswag", HellaSwagDataset)
 
 
-
 def list_available_datasets() -> None:
     """Print information about all available datasets."""
     print("Available datasets:")

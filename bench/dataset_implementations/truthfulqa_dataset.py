@@ -54,39 +54,61 @@ class TruthfulQADataset(DatasetInterface):
 
     def _extract_categories(self, df: pd.DataFrame) -> List[str]:
         """Extract categories from TruthfulQA dataset.
-        
+
         TruthfulQA doesn't have explicit categories, so we'll create them
         based on question topics/themes.
         """
         if df.empty:
             return []
-            
+
         # For now, we'll use a single "Truthfulness" category
         # In the future, we could implement topic classification
-        categories = ["Truthfulness", "Science", "History", "Politics", "Health", "Other"]
-        
+        categories = [
+            "Truthfulness",
+            "Science",
+            "History",
+            "Politics",
+            "Health",
+            "Other",
+        ]
+
         # Simple keyword-based categorization
         def categorize_question(question: str) -> str:
             question_lower = question.lower()
-            
-            if any(word in question_lower for word in ['science', 'scientific', 'research', 'study', 'experiment']):
+
+            if any(
+                word in question_lower
+                for word in ["science", "scientific", "research", "study", "experiment"]
+            ):
                 return "Science"
-            elif any(word in question_lower for word in ['history', 'historical', 'war', 'president', 'century']):
-                return "History"  
-            elif any(word in question_lower for word in ['politics', 'political', 'government', 'election', 'law']):
+            elif any(
+                word in question_lower
+                for word in ["history", "historical", "war", "president", "century"]
+            ):
+                return "History"
+            elif any(
+                word in question_lower
+                for word in ["politics", "political", "government", "election", "law"]
+            ):
                 return "Politics"
-            elif any(word in question_lower for word in ['health', 'medical', 'disease', 'medicine', 'doctor']):
+            elif any(
+                word in question_lower
+                for word in ["health", "medical", "disease", "medicine", "doctor"]
+            ):
                 return "Health"
-            elif any(word in question_lower for word in ['truth', 'fact', 'believe', 'myth', 'misconception']):
+            elif any(
+                word in question_lower
+                for word in ["truth", "fact", "believe", "myth", "misconception"]
+            ):
                 return "Truthfulness"
             else:
                 return "Other"
-        
+
         # Add category column to dataframe
-        if 'category' not in df.columns:
-            df['category'] = df['question'].apply(categorize_question)
-        
-        return sorted(df['category'].unique().tolist())
+        if "category" not in df.columns:
+            df["category"] = df["question"].apply(categorize_question)
+
+        return sorted(df["category"].unique().tolist())
 
     def get_available_categories(self) -> List[str]:
         """Get all available categories in the dataset."""
@@ -103,7 +125,7 @@ class TruthfulQADataset(DatasetInterface):
     ) -> Tuple[List[Question], DatasetInfo]:
         """Load TruthfulQA dataset with filtering and sampling."""
         df = self._load_raw_dataset()
-        
+
         if df.empty:
             return [], DatasetInfo(
                 name=self.dataset_name,
@@ -131,7 +153,9 @@ class TruthfulQADataset(DatasetInterface):
             for category in df["category"].unique():
                 category_df = df[df["category"] == category]
                 if len(category_df) > samples_per_category:
-                    sampled_df = category_df.sample(samples_per_category, random_state=seed)
+                    sampled_df = category_df.sample(
+                        samples_per_category, random_state=seed
+                    )
                     sampled_dfs.append(sampled_df)
                 else:
                     sampled_dfs.append(category_df)
@@ -144,14 +168,14 @@ class TruthfulQADataset(DatasetInterface):
             mc1_targets = row["mc1_targets"]
             choices = mc1_targets["choices"]
             labels = mc1_targets["labels"]
-            
+
             # Find the correct answer (label = 1)
             correct_idx = None
             for i, label in enumerate(labels):
                 if label == 1:
                     correct_idx = i
                     break
-            
+
             if correct_idx is not None:
                 question = Question(
                     question_id=f"truthfulqa_{len(questions)}",
@@ -177,7 +201,7 @@ class TruthfulQADataset(DatasetInterface):
     def format_prompt(self, question: Question, style: str = "plain") -> str:
         """Format a question into a prompt."""
         formatter = PromptFormatter()
-        
+
         if style == "plain":
             return formatter.format_enhanced_prompt(
                 question.question, question.options, "TruthfulQA", "hard", "plain"
@@ -201,7 +225,7 @@ class TruthfulQAPromptFormatter(PromptFormatter):
         """Format a plain prompt for TruthfulQA."""
         formatted_options = ""
         for i, option in enumerate(options):
-            letter = chr(ord('A') + i)
+            letter = chr(ord("A") + i)
             formatted_options += f"{letter}) {option}\n"
 
         prompt = (
@@ -216,7 +240,7 @@ class TruthfulQAPromptFormatter(PromptFormatter):
         """Format a chain-of-thought prompt for TruthfulQA."""
         formatted_options = ""
         for i, option in enumerate(options):
-            letter = chr(ord('A') + i)
+            letter = chr(ord("A") + i)
             formatted_options += f"{letter}) {option}\n"
 
         prompt = (

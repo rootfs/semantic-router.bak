@@ -33,7 +33,9 @@ from tqdm import tqdm
 # Robust answer extraction patterns for structured response parsing
 ANSWER_PATTERN_PRIMARY = re.compile(r"(?:answer\s*:?\s*)([A-J])", re.IGNORECASE)
 ANSWER_PATTERN_FINAL = re.compile(r"(?:final\s*answer\s*:?\s*)([A-J])", re.IGNORECASE)
-ANSWER_PATTERN_CONCLUSION = re.compile(r"(?:therefore|thus|so).*?([A-J])", re.IGNORECASE)
+ANSWER_PATTERN_CONCLUSION = re.compile(
+    r"(?:therefore|thus|so).*?([A-J])", re.IGNORECASE
+)
 
 
 def parse_args():
@@ -178,36 +180,31 @@ def parse_args():
 def get_dataset_optimal_tokens(dataset_info):
     """
     Determine optimal token limit based on dataset complexity and reasoning requirements.
-    
+
     Token limits are optimized for structured response generation while maintaining
     efficiency across different reasoning complexity levels.
     """
     dataset_name = dataset_info.name.lower()
     difficulty = dataset_info.difficulty_level.lower()
-    
+
     # Optimized token limits per dataset
     dataset_tokens = {
-        'gpqa': 500,        # Graduate-level scientific reasoning
-        'truthfulqa': 250,  # Misconception analysis
-        'hellaswag': 250,   # Natural continuation reasoning
-        'arc': 220,         # Elementary/middle school science
-        'commonsenseqa': 300,  # Common sense reasoning
-        'mmlu': 150 if difficulty == 'undergraduate' else 200,  # Academic knowledge
+        "gpqa": 500,  # Graduate-level scientific reasoning
+        "truthfulqa": 250,  # Misconception analysis
+        "hellaswag": 250,  # Natural continuation reasoning
+        "arc": 220,  # Elementary/middle school science
+        "commonsenseqa": 300,  # Common sense reasoning
+        "mmlu": 150 if difficulty == "undergraduate" else 200,  # Academic knowledge
     }
-    
+
     # Find matching dataset
     for dataset_key, tokens in dataset_tokens.items():
         if dataset_key in dataset_name:
             return tokens
-    
+
     # Default based on difficulty level
-    difficulty_tokens = {
-        'graduate': 300,
-        'hard': 300,
-        'moderate': 200,
-        'easy': 150
-    }
-    
+    difficulty_tokens = {"graduate": 300, "hard": 300, "moderate": 200, "easy": 150}
+
     return difficulty_tokens.get(difficulty, 200)
 
 
@@ -262,24 +259,24 @@ def extract_answer(response: Any) -> Optional[str]:
 
     # Try multiple extraction patterns in order of preference
     patterns = [ANSWER_PATTERN_PRIMARY, ANSWER_PATTERN_FINAL, ANSWER_PATTERN_CONCLUSION]
-    
+
     for pattern in patterns:
         match = pattern.search(response)
         if match:
             return match.group(1).upper()
-    
+
     # Fallback 1: Look for standalone letters at end of response
-    lines = response.strip().split('\n')
+    lines = response.strip().split("\n")
     for line in reversed(lines[-3:]):  # Check last 3 lines
         line = line.strip()
         if len(line) == 1 and line.upper() in "ABCDEFGHIJ":
             return line.upper()
-    
+
     # Fallback 2: Find last letter in entire response
     for char in reversed(response):
         if char.upper() in "ABCDEFGHIJ":
             return char.upper()
-    
+
     return None
 
 
@@ -302,7 +299,7 @@ def call_model(
         )
         # For reasoning models, content might be in reasoning_content instead of content
         message = response.choices[0].message
-        text = message.content or getattr(message, 'reasoning_content', None) or ""
+        text = message.content or getattr(message, "reasoning_content", None) or ""
         usage = getattr(response, "usage", None)
         prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
         completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
@@ -386,11 +383,11 @@ def process_question_single(
     end_time = time.time()
 
     predicted_answer = extract_answer(response_text) if success else None
-    
+
     # Convert predicted letter to index for comparison
-    if predicted_answer and predicted_answer in 'ABCDEFGHIJ':
-        predicted_idx = ord(predicted_answer) - ord('A')
-        is_correct = (predicted_idx == question.correct_answer)
+    if predicted_answer and predicted_answer in "ABCDEFGHIJ":
+        predicted_idx = ord(predicted_answer) - ord("A")
+        is_correct = predicted_idx == question.correct_answer
     else:
         is_correct = False
 
@@ -477,12 +474,16 @@ def evaluate_model_vllm_multimode(
     print(f"Using vLLM model: {model}, endpoint: {endpoint}")
 
     # Check if dataset has actual CoT content by examining sample questions
-    has_cot_content = any(q.cot_content is not None and q.cot_content.strip() for q in questions[:10])
-    
+    has_cot_content = any(
+        q.cot_content is not None and q.cot_content.strip() for q in questions[:10]
+    )
+
     if has_cot_content:
         print(f"  Dataset has CoT content - using 3 modes: NR, XC, NR_REASONING")
     else:
-        print(f"  Dataset lacks CoT content - using 2 modes: NR, NR_REASONING (skipping XC)")
+        print(
+            f"  Dataset lacks CoT content - using 2 modes: NR, NR_REASONING (skipping XC)"
+        )
 
     results: List[Dict[str, Any]] = []
 
@@ -512,13 +513,17 @@ def evaluate_model_vllm_multimode(
                 True,
             ),  # Plain prompt, reasoning toggle ON (model reasoning)
         ]
-    
+
     # Add XC mode only if dataset has CoT content
     if has_cot_content:
         if is_deepseek_or_qwen:
-            mode_variants.insert(1, ("VLLM_XC", "XC", False))  # Insert between NR and NR_REASONING
+            mode_variants.insert(
+                1, ("VLLM_XC", "XC", False)
+            )  # Insert between NR and NR_REASONING
         else:
-            mode_variants.insert(1, ("VLLM_XC", "XC", None))  # Insert between NR and NR_REASONING
+            mode_variants.insert(
+                1, ("VLLM_XC", "XC", None)
+            )  # Insert between NR and NR_REASONING
 
     def run_variants(q: Question) -> List[Dict[str, Any]]:
         local_records: List[Dict[str, Any]] = []
@@ -715,7 +720,7 @@ def main():
             f"Dataset loaded: {len(questions)} questions across {len(dataset_info.categories)} categories"
         )
         print(f"Categories: {', '.join(dataset_info.categories)}")
-        
+
         # Check for empty dataset
         if len(questions) == 0:
             print(f"❌ No questions loaded from dataset '{args.dataset}'")
@@ -782,7 +787,9 @@ def main():
         print(f"Using user-specified max_tokens: {optimal_tokens}")
     else:
         optimal_tokens = get_dataset_optimal_tokens(dataset_info)
-        print(f"Using dataset-optimal max_tokens: {optimal_tokens} (for {dataset_info.name})")
+        print(
+            f"Using dataset-optimal max_tokens: {optimal_tokens} (for {dataset_info.name})"
+        )
 
     # Router evaluation (NR-only)
     if args.run_router and router_endpoint and router_models:

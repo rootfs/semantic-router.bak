@@ -6,7 +6,7 @@ dataset evaluation across MMLU, ARC, GPQA, TruthfulQA, CommonsenseQA, and HellaS
 
 Key Features:
 - Unified Question and DatasetInfo data structures
-- Abstract DatasetInterface for consistent implementations  
+- Abstract DatasetInterface for consistent implementations
 - Enhanced PromptFormatter with dataset-specific optimizations
 - Support for Chain-of-Thought (CoT) reasoning modes
 """
@@ -22,7 +22,7 @@ import pandas as pd
 class Question:
     """
     Standardized question representation for multi-choice reasoning tasks.
-    
+
     Attributes:
         question_id: Unique identifier for the question
         category: Subject or topic category
@@ -32,6 +32,7 @@ class Question:
         cot_content: Optional chain-of-thought reasoning
         metadata: Additional dataset-specific information
     """
+
     question_id: str
     category: str
     question: str
@@ -45,7 +46,7 @@ class Question:
 class DatasetInfo:
     """
     Dataset metadata and configuration information.
-    
+
     Attributes:
         name: Dataset name (e.g., "GPQA-Main", "ARC-Challenge")
         description: Brief description of the dataset
@@ -54,6 +55,7 @@ class DatasetInfo:
         format_type: Question format (typically "multiple_choice")
         difficulty_level: Complexity level (e.g., "graduate", "undergraduate")
     """
+
     name: str
     description: str
     categories: List[str]
@@ -117,44 +119,44 @@ class DatasetInterface(ABC):
 
 class PromptFormatter:
     """Utility class for formatting prompts consistently across datasets."""
-    
+
     @staticmethod
     def get_dataset_specific_instructions(dataset_name: str, difficulty: str) -> str:
         """Get dataset-specific instructions to improve accuracy."""
         dataset_name = dataset_name.lower()
         difficulty = difficulty.lower()
-        
-        if 'gpqa' in dataset_name:
+
+        if "gpqa" in dataset_name:
             return (
                 "- This is a graduate-level scientific question\n"
                 "- Consider the underlying scientific principles\n"
                 "- Eliminate obviously incorrect options first\n"
             )
-        elif 'truthfulqa' in dataset_name:
+        elif "truthfulqa" in dataset_name:
             return (
                 "- This question may contain common misconceptions\n"
                 "- Be wary of answers that sound plausible but are incorrect\n"
                 "- Choose the most factually accurate option\n"
             )
-        elif 'hellaswag' in dataset_name:
+        elif "hellaswag" in dataset_name:
             return (
                 "- Choose the most natural and logical continuation\n"
                 "- Consider common sense and typical sequences of events\n"
                 "- Think about what would realistically happen next\n"
             )
-        elif 'commonsenseqa' in dataset_name:
+        elif "commonsenseqa" in dataset_name:
             return (
                 "- Apply common sense reasoning\n"
                 "- Consider everyday knowledge and experiences\n"
                 "- Think about typical cause-and-effect relationships\n"
             )
-        elif 'arc' in dataset_name:
+        elif "arc" in dataset_name:
             return (
                 "- This is a science question requiring logical reasoning\n"
                 "- Apply scientific knowledge and principles\n"
                 "- Consider the most scientifically accurate answer\n"
             )
-        elif 'mmlu' in dataset_name:
+        elif "mmlu" in dataset_name:
             return (
                 "- This requires specific domain knowledge\n"
                 "- Choose the most accurate and complete answer\n"
@@ -235,13 +237,21 @@ class PromptFormatter:
             "- Provide your final answer in the exact format: Answer: [letter]\n\n"
             "Your response:"
         )
-    
+
     @staticmethod
-    def format_enhanced_prompt(question: str, options: List[str], dataset_name: str, difficulty: str, prompt_style: str = "plain") -> str:
+    def format_enhanced_prompt(
+        question: str,
+        options: List[str],
+        dataset_name: str,
+        difficulty: str,
+        prompt_style: str = "plain",
+    ) -> str:
         """Format an enhanced prompt with dataset-specific guidance."""
         formatted_options = PromptFormatter.format_options(options)
-        dataset_instructions = PromptFormatter.get_dataset_specific_instructions(dataset_name, difficulty)
-        
+        dataset_instructions = PromptFormatter.get_dataset_specific_instructions(
+            dataset_name, difficulty
+        )
+
         if prompt_style == "cot":
             base_instructions = (
                 "Instructions:\n"
@@ -267,7 +277,7 @@ class PromptFormatter:
                 "- Respond with ONLY the format: Answer: [letter]\n"
                 "- Do not include any other text after your answer\n\n"
             )
-        
+
         return (
             f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
             f"{base_instructions}"
