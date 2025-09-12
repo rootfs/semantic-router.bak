@@ -1,11 +1,6 @@
 """Dataset implementations for the benchmark."""
 
 from .arc_dataset import ARCChallengeDataset, ARCDataset, ARCEasyDataset
-from .bigbench_dataset import (
-    BIGBenchDataset,
-    BIGBenchMathDataset,
-    BIGBenchReasoningDataset,
-)
 from .gpqa_dataset import (
     GPQADataset,
     GPQADiamondDataset,
@@ -24,7 +19,4 @@ __all__ = [
     "GPQAMainDataset",
     "GPQAExtendedDataset",
     "GPQADiamondDataset",
-    "BIGBenchDataset",
-    "BIGBenchReasoningDataset",
-    "BIGBenchMathDataset",
 ]

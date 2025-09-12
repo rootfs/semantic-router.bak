@@ -55,9 +55,10 @@ python3 router_reason_bench_v2.py \
 - `arc` - AI2 Reasoning Challenge (both Easy + Challenge)
 - `arc-easy` - ARC Easy questions only
 - `arc-challenge` - ARC Challenge questions only  
-- `mmlu` - MMLU-Pro dataset
-- `gpqa` - Graduate-level Q&A (if available)
-- `bigbench` - BIG-bench tasks (if available)
+- `mmlu` / `mmlu-pro` - MMLU-Pro dataset (14 categories)
+- `gpqa` / `gpqa-main` - GPQA Main dataset (graduate-level)
+- `gpqa-extended` - GPQA Extended dataset
+- `gpqa-diamond` - GPQA Diamond dataset (highest quality)
 
 ## 📊 Example Usage
 

@@ -12,11 +12,6 @@ from dataset_implementations.arc_dataset import (
     ARCDataset,
     ARCEasyDataset,
 )
-from dataset_implementations.bigbench_dataset import (
-    BIGBenchDataset,
-    BIGBenchMathDataset,
-    BIGBenchReasoningDataset,
-)
 from dataset_implementations.gpqa_dataset import (
     GPQADataset,
     GPQADiamondDataset,
@@ -103,11 +98,6 @@ DatasetFactory.register_dataset("gpqa-main", GPQAMainDataset)
 DatasetFactory.register_dataset("gpqa-extended", GPQAExtendedDataset)
 DatasetFactory.register_dataset("gpqa-diamond", GPQADiamondDataset)
 
-# Register BIG-bench datasets
-DatasetFactory.register_dataset("bigbench", BIGBenchDataset)
-DatasetFactory.register_dataset("big-bench", BIGBenchDataset)
-DatasetFactory.register_dataset("bigbench-reasoning", BIGBenchReasoningDataset)
-DatasetFactory.register_dataset("bigbench-math", BIGBenchMathDataset)
 
 
 def list_available_datasets() -> None:

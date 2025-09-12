@@ -637,6 +637,17 @@ def main():
             f"Dataset loaded: {len(questions)} questions across {len(dataset_info.categories)} categories"
         )
         print(f"Categories: {', '.join(dataset_info.categories)}")
+        
+        # Check for empty dataset
+        if len(questions) == 0:
+            print(f"❌ No questions loaded from dataset '{args.dataset}'")
+            print("This could be due to:")
+            print("  - Dataset requiring authentication (gated dataset)")
+            print("  - Network connectivity issues")
+            print("  - Invalid dataset name or configuration")
+            print("\nTry a different dataset:")
+            list_available_datasets()
+            return
 
     except Exception as e:
         print(f"Error loading dataset '{args.dataset}': {e}")
