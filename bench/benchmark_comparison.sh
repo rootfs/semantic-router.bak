@@ -1,32 +1,36 @@
 #!/bin/bash
 
-# Comprehensive benchmark script to compare Router vs Direct vLLM
-# Usage: ./benchmark_comparison.sh [dataset] [samples_per_category]
+# Multi-Dataset Reasoning Benchmark Comparison
+# 
+# Comprehensive evaluation framework comparing semantic router performance
+# against direct vLLM inference across reasoning datasets.
+#
+# Usage: ./benchmark_comparison.sh [dataset] [samples_per_category] [concurrent_requests]
+# Example: ./benchmark_comparison.sh gpqa 5 2
 
 set -e
 
-# Configuration
-DATASET=${1:-"arc"}                    # Default to ARC dataset
-SAMPLES_PER_CATEGORY=${2:-5}           # Default to 5 samples per category
-CONCURRENT_REQUESTS=${3:-2}            # Default to 2 concurrent requests
+# Configuration parameters
+DATASET=${1:-"arc"}
+SAMPLES_PER_CATEGORY=${2:-5}
+CONCURRENT_REQUESTS=${3:-2}
 
-# Router configuration (via Envoy proxy)
+# Semantic router configuration
 ROUTER_ENDPOINT="http://127.0.0.1:8801/v1"
 ROUTER_API_KEY="1234"
-ROUTER_MODEL="auto"                    # Router decides the model
+ROUTER_MODEL="auto"
 
-# Direct vLLM configuration  
+# Direct vLLM configuration
 VLLM_ENDPOINT="http://127.0.0.1:8000/v1"
 VLLM_API_KEY="1234"
-VLLM_MODEL="openai/gpt-oss-20b"        # Direct model access
+VLLM_MODEL="openai/gpt-oss-20b"
 
-# Benchmark parameters
-MAX_TOKENS=1024
+# Evaluation parameters
 TEMPERATURE=0.0
 OUTPUT_DIR="results/comparison_$(date +%Y%m%d_%H%M%S)"
 
-echo "🎯 SEMANTIC ROUTER vs DIRECT vLLM BENCHMARK"
-echo "=============================================="
+echo "🎯 MULTI-DATASET REASONING BENCHMARK"
+echo "====================================="
 echo "Dataset: $DATASET"
 echo "Samples per category: $SAMPLES_PER_CATEGORY"
 echo "Concurrent requests: $CONCURRENT_REQUESTS"
@@ -59,7 +63,6 @@ python3 router_reason_bench_v2.py \
     --router-endpoint "$ROUTER_ENDPOINT" \
     --router-api-key "$ROUTER_API_KEY" \
     --router-models "$ROUTER_MODEL" \
-    --max-tokens "$MAX_TOKENS" \
     --temperature "$TEMPERATURE" \
     --output-dir "$OUTPUT_DIR" \
     --run-router
@@ -80,7 +83,6 @@ python3 router_reason_bench_v2.py \
     --vllm-api-key "$VLLM_API_KEY" \
     --vllm-models "$VLLM_MODEL" \
     --vllm-exec-modes "NR" "XC" \
-    --max-tokens "$MAX_TOKENS" \
     --temperature "$TEMPERATURE" \
     --output-dir "$OUTPUT_DIR" \
     --run-vllm

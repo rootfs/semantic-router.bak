@@ -1,8 +1,15 @@
 """
-Dataset-agnostic reasoning benchmark for evaluating router vs direct vLLM.
+Multi-Dataset Reasoning Benchmark
 
-This refactored version supports multiple datasets through a factory pattern,
-making it easy to add new evaluation datasets.
+A comprehensive evaluation framework for comparing semantic router performance
+against direct vLLM inference across various reasoning datasets.
+
+Features:
+- Dataset-agnostic architecture supporting MMLU, ARC, GPQA, TruthfulQA, CommonsenseQA, HellaSwag
+- Optimized token limits per dataset complexity
+- Multiple reasoning modes (NR, XC, NR_REASONING)
+- Structured response parsing with robust answer extraction
+- Comprehensive metrics and visualization
 """
 
 import argparse
@@ -23,7 +30,7 @@ from dataset_interface import DatasetInfo, Question, questions_to_dataframe
 from openai import OpenAI
 from tqdm import tqdm
 
-# Enhanced answer extraction patterns
+# Robust answer extraction patterns for structured response parsing
 ANSWER_PATTERN_PRIMARY = re.compile(r"(?:answer\s*:?\s*)([A-J])", re.IGNORECASE)
 ANSWER_PATTERN_FINAL = re.compile(r"(?:final\s*answer\s*:?\s*)([A-J])", re.IGNORECASE)
 ANSWER_PATTERN_CONCLUSION = re.compile(r"(?:therefore|thus|so).*?([A-J])", re.IGNORECASE)
@@ -31,7 +38,7 @@ ANSWER_PATTERN_CONCLUSION = re.compile(r"(?:therefore|thus|so).*?([A-J])", re.IG
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Dataset-agnostic ReasonBench: evaluate router vs direct vLLM with detailed metrics"
+        description="Multi-Dataset Reasoning Benchmark: Comprehensive evaluation framework for semantic router vs direct vLLM"
     )
 
     # Dataset selection
@@ -47,12 +54,12 @@ def parse_args():
         help="List all available datasets and exit",
     )
 
-    # Router endpoint (NR-only evaluation; router decides reasoning internally)
+    # Semantic router configuration
     parser.add_argument(
         "--router-endpoint",
         type=str,
         default=os.environ.get("ROUTER_ENDPOINT", "http://127.0.0.1:8801/v1"),
-        help="Router endpoint URL (OpenAI-compatible)",
+        help="Semantic router endpoint URL",
     )
     parser.add_argument(
         "--router-api-key",
@@ -70,12 +77,12 @@ def parse_args():
         help="Router models to evaluate (default: auto).",
     )
 
-    # Direct vLLM endpoint (multi-mode evaluation)
+    # Direct vLLM configuration
     parser.add_argument(
         "--vllm-endpoint",
         type=str,
         default=os.environ.get("VLLM_ENDPOINT", ""),
-        help="Direct vLLM endpoint URL (OpenAI-compatible)",
+        help="Direct vLLM endpoint URL",
     )
     parser.add_argument(
         "--vllm-api-key",
@@ -91,23 +98,23 @@ def parse_args():
         help="Direct vLLM models to evaluate (leave empty to fetch from endpoint).",
     )
 
-    # VLLM execution modes (prompt styles)
+    # vLLM reasoning modes
     parser.add_argument(
         "--vllm-exec-modes",
         type=str,
         nargs="+",
         default=["NR", "XC"],
-        help="DEPRECATED: vLLM now runs 3 fixed realistic modes: NR (plain), XC (CoT), NR_REASONING (plain+toggle)",
+        help="vLLM reasoning modes: NR (neutral), XC (chain-of-thought), NR_REASONING (reasoning-enabled)",
     )
     parser.add_argument(
         "--run-router",
         action="store_true",
-        help="Run router NR-only evaluation",
+        help="Evaluate semantic router performance",
     )
     parser.add_argument(
         "--run-vllm",
         action="store_true",
-        help="Run vLLM direct evaluation (3 realistic modes: NR, XC, NR_REASONING)",
+        help="Evaluate direct vLLM performance across multiple reasoning modes",
     )
 
     # Dataset filtering options
@@ -169,31 +176,39 @@ def parse_args():
 
 
 def get_dataset_optimal_tokens(dataset_info):
-    """Get optimal token limit based on dataset characteristics."""
+    """
+    Determine optimal token limit based on dataset complexity and reasoning requirements.
+    
+    Token limits are optimized for structured response generation while maintaining
+    efficiency across different reasoning complexity levels.
+    """
     dataset_name = dataset_info.name.lower()
     difficulty = dataset_info.difficulty_level.lower()
     
-    # Dataset-specific token limits based on complexity and reasoning requirements
-    if 'gpqa' in dataset_name:
-        return 500  # Graduate-level complex reasoning needs completion space
-    elif 'truthfulqa' in dataset_name:
-        return 250  # Nuanced, potentially tricky questions
-    elif 'mmlu' in dataset_name and difficulty == 'undergraduate':
-        return 150  # Professional knowledge, direct answers
-    elif 'hellaswag' in dataset_name:
-        return 250  # Needs tokens for complete reasoning and structured response
-    elif 'arc' in dataset_name:
-        return 220  # Moderate reasoning requires more completion space
-    elif 'commonsenseqa' in dataset_name:
-        return 300  # Needs more tokens for complete reasoning
-    else:
-        # Default based on difficulty level
-        if difficulty == 'hard' or difficulty == 'graduate':
-            return 300
-        elif difficulty == 'moderate':
-            return 200
-        else:
-            return 150
+    # Optimized token limits per dataset
+    dataset_tokens = {
+        'gpqa': 500,        # Graduate-level scientific reasoning
+        'truthfulqa': 250,  # Misconception analysis
+        'hellaswag': 250,   # Natural continuation reasoning
+        'arc': 220,         # Elementary/middle school science
+        'commonsenseqa': 300,  # Common sense reasoning
+        'mmlu': 150 if difficulty == 'undergraduate' else 200,  # Academic knowledge
+    }
+    
+    # Find matching dataset
+    for dataset_key, tokens in dataset_tokens.items():
+        if dataset_key in dataset_name:
+            return tokens
+    
+    # Default based on difficulty level
+    difficulty_tokens = {
+        'graduate': 300,
+        'hard': 300,
+        'moderate': 200,
+        'easy': 150
+    }
+    
+    return difficulty_tokens.get(difficulty, 200)
 
 
 def get_available_models(endpoint: str, api_key: str = "") -> List[str]:

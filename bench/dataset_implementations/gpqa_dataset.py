@@ -1,8 +1,9 @@
 """
-GPQA (Graduate-level Google-proof Q&A) dataset implementation.
+GPQA Dataset Implementation
 
-This module implements the DatasetInterface for GPQA dataset with
-graduate-level questions in physics, chemistry, and biology.
+Graduate-level Google-proof Q&A dataset for advanced scientific reasoning
+evaluation. Supports Main, Extended, and Diamond variants with Chain-of-Thought
+reasoning content.
 """
 
 import os

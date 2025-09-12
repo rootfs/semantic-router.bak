@@ -1,7 +1,8 @@
 """
-MMLU-Pro dataset implementation.
+MMLU-Pro Dataset Implementation
 
-This module implements the DatasetInterface for MMLU-Pro dataset.
+Academic knowledge evaluation across 14 subject categories with
+Chain-of-Thought reasoning support.
 """
 
 import os

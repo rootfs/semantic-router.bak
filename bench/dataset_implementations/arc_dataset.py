@@ -1,8 +1,9 @@
 """
-ARC (AI2 Reasoning Challenge) dataset implementation.
+ARC Dataset Implementation
 
-This module implements the DatasetInterface for ARC dataset with both
-Easy and Challenge variants.
+AI2 Reasoning Challenge for elementary and middle school science questions
+with automatic subject categorization across Biology, Chemistry, Physics, 
+Earth Science, and General Science.
 """
 
 import os

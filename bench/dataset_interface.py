@@ -1,8 +1,14 @@
 """
-Dataset interface and factory for benchmark evaluation.
+Multi-Dataset Evaluation Interface
 
-This module provides abstract base classes and factory patterns to support
-multiple evaluation datasets in a unified way.
+Provides abstract base classes and standardized interfaces for reasoning
+dataset evaluation across MMLU, ARC, GPQA, TruthfulQA, CommonsenseQA, and HellaSwag.
+
+Key Features:
+- Unified Question and DatasetInfo data structures
+- Abstract DatasetInterface for consistent implementations  
+- Enhanced PromptFormatter with dataset-specific optimizations
+- Support for Chain-of-Thought (CoT) reasoning modes
 """
 
 from abc import ABC, abstractmethod
@@ -14,8 +20,18 @@ import pandas as pd
 
 @dataclass
 class Question:
-    """Standardized question format across all datasets."""
-
+    """
+    Standardized question representation for multi-choice reasoning tasks.
+    
+    Attributes:
+        question_id: Unique identifier for the question
+        category: Subject or topic category
+        question: The question text
+        options: List of answer choices
+        correct_answer: Index (int) of the correct option
+        cot_content: Optional chain-of-thought reasoning
+        metadata: Additional dataset-specific information
+    """
     question_id: str
     category: str
     question: str
@@ -27,14 +43,23 @@ class Question:
 
 @dataclass
 class DatasetInfo:
-    """Information about a dataset."""
-
+    """
+    Dataset metadata and configuration information.
+    
+    Attributes:
+        name: Dataset name (e.g., "GPQA-Main", "ARC-Challenge")
+        description: Brief description of the dataset
+        categories: List of available subject categories
+        total_questions: Total number of questions loaded
+        format_type: Question format (typically "multiple_choice")
+        difficulty_level: Complexity level (e.g., "graduate", "undergraduate")
+    """
     name: str
     description: str
     categories: List[str]
     total_questions: int
-    format_type: str  # "multiple_choice", "open_ended", etc.
-    difficulty_level: str  # "elementary", "undergraduate", "graduate", etc.
+    format_type: str
+    difficulty_level: str
 
 
 class DatasetInterface(ABC):
