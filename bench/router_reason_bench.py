@@ -19,7 +19,7 @@ from tqdm import tqdm
 # 1) Router-transparent: send a single neutral prompt; router/model decides reasoning.
 # 2) vLLM 3-case evaluation: run realistic scenarios that match router decision patterns:
 #    - NR: Plain prompt, no reasoning toggle (baseline/fast)
-#    - XC: CoT prompt, no reasoning toggle (prompt-based reasoning)  
+#    - XC: CoT prompt, no reasoning toggle (prompt-based reasoning)
 #    - NR_REASONING: Plain prompt, reasoning toggle ON (model-based reasoning)
 
 
@@ -347,10 +347,11 @@ def call_model(
         print(f"   Model: {model}")
         print(f"   Endpoint: {getattr(client, '_base_url', 'unknown')}")
         print(f"   API key set: {'Yes' if getattr(client, 'api_key', None) else 'No'}")
-        if hasattr(e, 'response'):
+        if hasattr(e, "response"):
             print(f"   HTTP status: {getattr(e.response, 'status_code', 'unknown')}")
             print(f"   Response text: {getattr(e.response, 'text', 'unknown')}")
         import traceback
+
         print(f"   Full traceback: {traceback.format_exc()}")
         return "ERROR", False, None, None, None
 
@@ -465,13 +466,15 @@ def evaluate_model_router_transparent(
 ) -> pd.DataFrame:
     """
     Evaluate router in transparent mode - send plain prompts and let router decide reasoning.
-    
+
     This represents the 'auto' mode where the router internally decides whether to use
     reasoning or not based on the question complexity.
     """
     client = OpenAI(base_url=endpoint, api_key=api_key or None)
     print(f"Using model: {model}, endpoint: {endpoint}")
-    print(f"API key provided: {'Yes' if api_key else 'No'} (length: {len(api_key) if api_key else 0})")
+    print(
+        f"API key provided: {'Yes' if api_key else 'No'} (length: {len(api_key) if api_key else 0})"
+    )
 
     results: List[Dict[str, Any]] = []
     questions_data = df.to_dict("records")
@@ -512,10 +515,10 @@ def evaluate_model_vllm_multimode(
     exec_modes: List[str],
 ) -> pd.DataFrame:
     """Run vLLM with 3 realistic reasoning scenarios.
-    
+
     The 3 scenarios represent real-world router decision patterns:
     1. NR - Plain prompt, no reasoning toggle (fast baseline)
-    2. XC - CoT prompt, no reasoning toggle (prompt-based reasoning)  
+    2. XC - CoT prompt, no reasoning toggle (prompt-based reasoning)
     3. NR_REASONING - Plain prompt, reasoning toggle ON (model-based reasoning)
     """
     client = OpenAI(base_url=endpoint, api_key=api_key or "dummy-key")
@@ -528,21 +531,29 @@ def evaluate_model_vllm_multimode(
     # For DeepSeek and Qwen3 models, explicitly set reasoning flags for all modes
     model_lower = model.lower()
     is_deepseek_or_qwen = (
-        (("ds" in model_lower) or ("deepseek" in model_lower)) and 
-        ("v31" in model_lower or "v3.1" in model_lower or "v3" in model_lower)
+        (("ds" in model_lower) or ("deepseek" in model_lower))
+        and ("v31" in model_lower or "v3.1" in model_lower or "v3" in model_lower)
     ) or ("qwen3" in model_lower)
-    
+
     if is_deepseek_or_qwen:
         mode_variants: List[Tuple[str, str, Optional[bool]]] = [
-            ("VLLM_NR", "NR", False),          # Plain prompt, reasoning OFF (baseline)
-            ("VLLM_XC", "XC", False),          # CoT prompt, reasoning OFF (prompt reasoning)
-            ("VLLM_NR_REASONING", "NR", True), # Plain prompt, reasoning ON (model reasoning)
+            ("VLLM_NR", "NR", False),  # Plain prompt, reasoning OFF (baseline)
+            ("VLLM_XC", "XC", False),  # CoT prompt, reasoning OFF (prompt reasoning)
+            (
+                "VLLM_NR_REASONING",
+                "NR",
+                True,
+            ),  # Plain prompt, reasoning ON (model reasoning)
         ]
     else:
         mode_variants: List[Tuple[str, str, Optional[bool]]] = [
-            ("VLLM_NR", "NR", None),           # Plain prompt, no toggle (baseline)
-            ("VLLM_XC", "XC", None),           # CoT prompt, no toggle (prompt reasoning)
-            ("VLLM_NR_REASONING", "NR", True), # Plain prompt, toggle ON (model reasoning)
+            ("VLLM_NR", "NR", None),  # Plain prompt, no toggle (baseline)
+            ("VLLM_XC", "XC", None),  # CoT prompt, no toggle (prompt reasoning)
+            (
+                "VLLM_NR_REASONING",
+                "NR",
+                True,
+            ),  # Plain prompt, toggle ON (model reasoning)
         ]
 
     def run_variants(q: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -551,7 +562,9 @@ def evaluate_model_vllm_multimode(
             extra_body = build_extra_body_for_model(model, reasoning_flag)
             # Debug: print extra_body for first question to verify configuration
             if q == questions_data[0]:
-                print(f"  {label}: reasoning_flag={reasoning_flag}, extra_body={extra_body}")
+                print(
+                    f"  {label}: reasoning_flag={reasoning_flag}, extra_body={extra_body}"
+                )
             rec = process_question_single(
                 client,
                 model,

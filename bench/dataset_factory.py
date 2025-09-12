@@ -6,43 +6,57 @@ implementations in a unified way.
 """
 
 from typing import Dict, List, Optional, Type
-from dataset_interface import DatasetInterface
+
+from dataset_implementations.arc_dataset import (
+    ARCChallengeDataset,
+    ARCDataset,
+    ARCEasyDataset,
+)
+from dataset_implementations.bigbench_dataset import (
+    BIGBenchDataset,
+    BIGBenchMathDataset,
+    BIGBenchReasoningDataset,
+)
+from dataset_implementations.gpqa_dataset import (
+    GPQADataset,
+    GPQADiamondDataset,
+    GPQAExtendedDataset,
+    GPQAMainDataset,
+)
 from dataset_implementations.mmlu_dataset import MMLUDataset
-from dataset_implementations.arc_dataset import ARCDataset, ARCEasyDataset, ARCChallengeDataset
-from dataset_implementations.gpqa_dataset import GPQADataset, GPQAMainDataset, GPQAExtendedDataset, GPQADiamondDataset
-from dataset_implementations.bigbench_dataset import BIGBenchDataset, BIGBenchReasoningDataset, BIGBenchMathDataset
+from dataset_interface import DatasetInterface
 
 
 class DatasetFactory:
     """Factory for creating dataset instances."""
-    
+
     _registered_datasets: Dict[str, Type[DatasetInterface]] = {}
-    
+
     @classmethod
     def register_dataset(cls, name: str, dataset_class: Type[DatasetInterface]) -> None:
         """Register a new dataset class.
-        
+
         Args:
             name: Name to register the dataset under
             dataset_class: Class implementing DatasetInterface
         """
         cls._registered_datasets[name.lower()] = dataset_class
-    
+
     @classmethod
     def get_available_datasets(cls) -> List[str]:
         """Get list of all registered dataset names."""
         return list(cls._registered_datasets.keys())
-    
+
     @classmethod
     def create_dataset(cls, name: str) -> DatasetInterface:
         """Create a dataset instance by name.
-        
+
         Args:
             name: Name of the dataset to create
-            
+
         Returns:
             Dataset instance implementing DatasetInterface
-            
+
         Raises:
             ValueError: If dataset name is not registered
         """
@@ -52,25 +66,25 @@ class DatasetFactory:
             raise ValueError(
                 f"Unknown dataset: {name}. Available datasets: {available}"
             )
-        
+
         dataset_class = cls._registered_datasets[name_lower]
         return dataset_class()
-    
+
     @classmethod
     def get_dataset_info(cls, name: str) -> Dict[str, str]:
         """Get basic info about a dataset without loading it.
-        
+
         Args:
             name: Name of the dataset
-            
+
         Returns:
             Dictionary with dataset information
         """
         dataset = cls.create_dataset(name)
         return {
-            'name': dataset.dataset_name,
-            'supports_cot': str(dataset.supports_cot),
-            'categories_count': str(len(dataset.get_available_categories())),
+            "name": dataset.dataset_name,
+            "supports_cot": str(dataset.supports_cot),
+            "categories_count": str(len(dataset.get_available_categories())),
         }
 
 
@@ -100,7 +114,7 @@ def list_available_datasets() -> None:
     """Print information about all available datasets."""
     print("Available datasets:")
     print("-" * 50)
-    
+
     for name in DatasetFactory.get_available_datasets():
         try:
             info = DatasetFactory.get_dataset_info(name)
@@ -116,10 +130,10 @@ def list_available_datasets() -> None:
 
 def create_dataset(name: str) -> DatasetInterface:
     """Convenience function to create a dataset instance.
-    
+
     Args:
         name: Name of the dataset to create
-        
+
     Returns:
         Dataset instance
     """

@@ -18,12 +18,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from dataset_factory import DatasetFactory, list_available_datasets
+from dataset_interface import DatasetInfo, Question, questions_to_dataframe
 from openai import OpenAI
 from tqdm import tqdm
-
-from dataset_factory import DatasetFactory, list_available_datasets
-from dataset_interface import Question, DatasetInfo, questions_to_dataframe
-
 
 # Answer extraction pattern
 ANSWER_PATTERN = re.compile(r"(?:answer(?:\sis)?:?\s*)([A-J])", re.IGNORECASE)
@@ -33,7 +31,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Dataset-agnostic ReasonBench: evaluate router vs direct vLLM with detailed metrics"
     )
-    
+
     # Dataset selection
     parser.add_argument(
         "--dataset",
@@ -46,7 +44,7 @@ def parse_args():
         action="store_true",
         help="List all available datasets and exit",
     )
-    
+
     # Router endpoint (NR-only evaluation; router decides reasoning internally)
     parser.add_argument(
         "--router-endpoint",
@@ -57,7 +55,9 @@ def parse_args():
     parser.add_argument(
         "--router-api-key",
         type=str,
-        default=os.environ.get("ROUTER_API_KEY", os.environ.get("OPENAI_API_KEY", "1234")),
+        default=os.environ.get(
+            "ROUTER_API_KEY", os.environ.get("OPENAI_API_KEY", "1234")
+        ),
         help="API key for router endpoint",
     )
     parser.add_argument(
@@ -122,7 +122,7 @@ def parse_args():
         default=5,
         help="Number of questions to sample per category. If not provided, all questions will be used.",
     )
-    
+
     # Execution options
     parser.add_argument(
         "--concurrent-requests",
@@ -325,7 +325,9 @@ def process_question_single(
     end_time = time.time()
 
     predicted_answer = extract_answer(response_text) if success else None
-    is_correct = (predicted_answer == question.correct_answer) if predicted_answer else False
+    is_correct = (
+        (predicted_answer == question.correct_answer) if predicted_answer else False
+    )
 
     return {
         "mode": prompt_mode,
@@ -400,10 +402,10 @@ def evaluate_model_vllm_multimode(
     exec_modes: List[str],
 ) -> pd.DataFrame:
     """Run vLLM with 3 realistic reasoning scenarios.
-    
+
     The 3 scenarios represent real-world router decision patterns:
     1. NR - Plain prompt, no reasoning toggle (fast baseline)
-    2. XC - CoT prompt, no reasoning toggle (prompt-based reasoning)  
+    2. XC - CoT prompt, no reasoning toggle (prompt-based reasoning)
     3. NR_REASONING - Plain prompt, reasoning toggle ON (model-based reasoning)
     """
     client = OpenAI(base_url=endpoint, api_key=api_key or "dummy-key")
@@ -415,21 +417,29 @@ def evaluate_model_vllm_multimode(
     # For DeepSeek and Qwen3 models, explicitly set reasoning flags for all modes
     model_lower = model.lower()
     is_deepseek_or_qwen = (
-        (("ds" in model_lower) or ("deepseek" in model_lower)) and 
-        ("v31" in model_lower or "v3.1" in model_lower or "v3" in model_lower)
+        (("ds" in model_lower) or ("deepseek" in model_lower))
+        and ("v31" in model_lower or "v3.1" in model_lower or "v3" in model_lower)
     ) or ("qwen3" in model_lower)
-    
+
     if is_deepseek_or_qwen:
         mode_variants: List[Tuple[str, str, Optional[bool]]] = [
-            ("VLLM_NR", "NR", False),          # Plain prompt, reasoning OFF (baseline)
-            ("VLLM_XC", "XC", False),          # CoT prompt, reasoning OFF (prompt reasoning)
-            ("VLLM_NR_REASONING", "NR", True), # Plain prompt, reasoning ON (model reasoning)
+            ("VLLM_NR", "NR", False),  # Plain prompt, reasoning OFF (baseline)
+            ("VLLM_XC", "XC", False),  # CoT prompt, reasoning OFF (prompt reasoning)
+            (
+                "VLLM_NR_REASONING",
+                "NR",
+                True,
+            ),  # Plain prompt, reasoning ON (model reasoning)
         ]
     else:
         mode_variants: List[Tuple[str, str, Optional[bool]]] = [
-            ("VLLM_NR", "NR", None),           # Plain prompt, no toggle (baseline)
-            ("VLLM_XC", "XC", None),           # CoT prompt, no toggle (prompt reasoning)
-            ("VLLM_NR_REASONING", "NR", True), # Plain prompt, toggle ON (model reasoning)
+            ("VLLM_NR", "NR", None),  # Plain prompt, no toggle (baseline)
+            ("VLLM_XC", "XC", None),  # CoT prompt, no toggle (prompt reasoning)
+            (
+                "VLLM_NR_REASONING",
+                "NR",
+                True,
+            ),  # Plain prompt, toggle ON (model reasoning)
         ]
 
     def run_variants(q: Question) -> List[Dict[str, Any]]:
@@ -438,7 +448,9 @@ def evaluate_model_vllm_multimode(
             extra_body = build_extra_body_for_model(model, reasoning_flag)
             # Debug: print extra_body for first question to verify configuration
             if q == questions[0]:
-                print(f"  {label}: reasoning_flag={reasoning_flag}, extra_body={extra_body}")
+                print(
+                    f"  {label}: reasoning_flag={reasoning_flag}, extra_body={extra_body}"
+                )
             rec = process_question_single(
                 client,
                 model,
@@ -621,9 +633,11 @@ def main():
             samples_per_category=args.samples_per_category,
             seed=args.seed,
         )
-        print(f"Dataset loaded: {len(questions)} questions across {len(dataset_info.categories)} categories")
+        print(
+            f"Dataset loaded: {len(questions)} questions across {len(dataset_info.categories)} categories"
+        )
         print(f"Categories: {', '.join(dataset_info.categories)}")
-        
+
     except Exception as e:
         print(f"Error loading dataset '{args.dataset}': {e}")
         print("\nAvailable datasets:")

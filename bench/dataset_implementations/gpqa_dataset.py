@@ -5,30 +5,26 @@ This module implements the DatasetInterface for GPQA dataset with
 graduate-level questions in physics, chemistry, and biology.
 """
 
+import os
 import random
+import sys
 from typing import List, Optional, Tuple
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 from datasets import load_dataset
 
-import sys
-import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dataset_interface import (
-    DatasetInterface, 
-    Question, 
-    DatasetInfo, 
-    PromptFormatter
-)
+from dataset_interface import DatasetInfo, DatasetInterface, PromptFormatter, Question
 
 
 class GPQADataset(DatasetInterface):
     """GPQA (Graduate-level Google-proof Q&A) dataset implementation."""
-    
+
     def __init__(self, subset: str = "gpqa_main"):
         """Initialize GPQA dataset.
-        
+
         Args:
             subset: Which GPQA subset to use ("gpqa_main", "gpqa_extended", or "gpqa_diamond")
         """
@@ -36,23 +32,23 @@ class GPQADataset(DatasetInterface):
         valid_subsets = ["gpqa_main", "gpqa_extended", "gpqa_diamond"]
         if self.subset not in valid_subsets:
             raise ValueError(f"subset must be one of {valid_subsets}")
-        
+
         self._dataset_cache = None
         self._categories_cache = None
-    
+
     @property
     def dataset_name(self) -> str:
         return f"GPQA-{self.subset.replace('gpqa_', '').title()}"
-    
+
     @property
     def supports_cot(self) -> bool:
         return True  # GPQA has reasoning explanations
-    
+
     def _load_raw_dataset(self):
         """Load raw GPQA dataset from Hugging Face."""
         if self._dataset_cache is not None:
             return self._dataset_cache
-        
+
         try:
             # Try loading from the official GPQA dataset
             dataset = load_dataset("Idavidrein/gpqa", self.subset, split="train")
@@ -60,37 +56,39 @@ class GPQADataset(DatasetInterface):
         except Exception as e:
             # Fallback: try alternative dataset names or warn user
             print(f"Warning: Could not load GPQA dataset {self.subset}: {e}")
-            print("You may need to install the dataset manually or check the dataset name.")
+            print(
+                "You may need to install the dataset manually or check the dataset name."
+            )
             # Create empty dataframe as fallback
             self._dataset_cache = pd.DataFrame()
-        
+
         return self._dataset_cache
-    
+
     def _standardize_subject_category(self, subject: str) -> str:
         """Standardize subject names to consistent categories."""
         subject_lower = subject.lower() if subject else ""
-        
+
         # Map various subject names to standard categories
-        if any(word in subject_lower for word in ['physics', 'phys']):
-            return 'Physics'
-        elif any(word in subject_lower for word in ['chemistry', 'chem']):
-            return 'Chemistry'
-        elif any(word in subject_lower for word in ['biology', 'bio']):
-            return 'Biology'
-        elif any(word in subject_lower for word in ['math', 'mathematics']):
-            return 'Mathematics'
+        if any(word in subject_lower for word in ["physics", "phys"]):
+            return "Physics"
+        elif any(word in subject_lower for word in ["chemistry", "chem"]):
+            return "Chemistry"
+        elif any(word in subject_lower for word in ["biology", "bio"]):
+            return "Biology"
+        elif any(word in subject_lower for word in ["math", "mathematics"]):
+            return "Mathematics"
         else:
-            return 'Other'
-    
+            return "Other"
+
     def load_dataset(
-        self, 
+        self,
         categories: Optional[List[str]] = None,
         samples_per_category: Optional[int] = None,
-        seed: int = 42
+        seed: int = 42,
     ) -> Tuple[List[Question], DatasetInfo]:
         """Load GPQA dataset."""
         df = self._load_raw_dataset()
-        
+
         if df.empty:
             # Return empty dataset if loading failed
             return [], DatasetInfo(
@@ -99,67 +97,69 @@ class GPQADataset(DatasetInterface):
                 categories=[],
                 total_questions=0,
                 format_type="multiple_choice",
-                difficulty_level="graduate"
+                difficulty_level="graduate",
             )
-        
+
         # Convert to Question objects
         questions = []
         for _, row in df.iterrows():
             # Handle different possible column names for GPQA
-            question_text = str(row.get('Question', row.get('question', '')))
-            
+            question_text = str(row.get("Question", row.get("question", "")))
+
             # Extract multiple choice options
             options = []
             correct_answer = None
-            
+
             # GPQA typically has options as separate columns or in a list
-            if 'Choices' in row and isinstance(row['Choices'], list):
-                options = [str(choice) for choice in row['Choices']]
+            if "Choices" in row and isinstance(row["Choices"], list):
+                options = [str(choice) for choice in row["Choices"]]
             else:
                 # Try to extract from individual option columns (A, B, C, D)
-                for letter in ['A', 'B', 'C', 'D']:
+                for letter in ["A", "B", "C", "D"]:
                     if letter in row and pd.notna(row[letter]):
                         options.append(str(row[letter]))
-            
+
             # Get correct answer
-            if 'Correct Answer' in row:
-                correct_answer = str(row['Correct Answer'])
-            elif 'Answer' in row:
-                correct_answer = str(row['Answer'])
-            elif 'answer' in row:
-                correct_answer = str(row['answer'])
-            
+            if "Correct Answer" in row:
+                correct_answer = str(row["Correct Answer"])
+            elif "Answer" in row:
+                correct_answer = str(row["Answer"])
+            elif "answer" in row:
+                correct_answer = str(row["answer"])
+
             # Get subject/category
-            subject = row.get('Subject', row.get('subject', row.get('Category', 'Other')))
+            subject = row.get(
+                "Subject", row.get("subject", row.get("Category", "Other"))
+            )
             category = self._standardize_subject_category(str(subject))
-            
+
             # Get explanation/reasoning if available
             explanation = None
-            for col in ['Explanation', 'explanation', 'reasoning', 'Reasoning']:
+            for col in ["Explanation", "explanation", "reasoning", "Reasoning"]:
                 if col in row and pd.notna(row[col]):
                     explanation = str(row[col])
                     break
-            
+
             question = Question(
-                question_id=str(row.get('id', f"gpqa_{len(questions)}")),
+                question_id=str(row.get("id", f"gpqa_{len(questions)}")),
                 category=category,
                 question=question_text,
                 options=options,
                 correct_answer=correct_answer,
                 cot_content=explanation,
                 metadata={
-                    'source': 'GPQA',
-                    'subset': self.subset,
-                    'difficulty': 'graduate',
-                    'subject': str(subject)
-                }
+                    "source": "GPQA",
+                    "subset": self.subset,
+                    "difficulty": "graduate",
+                    "subject": str(subject),
+                },
             )
             questions.append(question)
-        
+
         # Get all unique categories
         all_categories = sorted(list(set(q.category for q in questions)))
         self._categories_cache = all_categories
-        
+
         # Filter by categories if specified
         if categories:
             questions = [q for q in questions if q.category in categories]
@@ -169,19 +169,19 @@ class GPQADataset(DatasetInterface):
                     f"No data found for specified categories. "
                     f"Valid categories are: {valid_categories}"
                 )
-        
+
         # Sample if requested
         if samples_per_category:
             random.seed(seed)
             np.random.seed(seed)
-            
+
             # Group by category
             category_questions = {}
             for q in questions:
                 if q.category not in category_questions:
                     category_questions[q.category] = []
                 category_questions[q.category].append(q)
-            
+
             # Sample from each category
             sampled_questions = []
             for category, cat_questions in category_questions.items():
@@ -190,9 +190,9 @@ class GPQADataset(DatasetInterface):
                     sampled_questions.extend(sampled)
                 else:
                     sampled_questions.extend(cat_questions)
-            
+
             questions = sampled_questions
-        
+
         # Create dataset info
         dataset_info = DatasetInfo(
             name=self.dataset_name,
@@ -200,39 +200,31 @@ class GPQADataset(DatasetInterface):
             categories=list(set(q.category for q in questions)),
             total_questions=len(questions),
             format_type="multiple_choice",
-            difficulty_level="graduate"
+            difficulty_level="graduate",
         )
-        
+
         return questions, dataset_info
-    
+
     def get_available_categories(self) -> List[str]:
         """Get all available GPQA categories."""
         if self._categories_cache is None:
             # Load dataset to get categories
             self.load_dataset()
         return self._categories_cache or []
-    
-    def format_prompt(
-        self, 
-        question: Question, 
-        prompt_style: str = "plain"
-    ) -> str:
+
+    def format_prompt(self, question: Question, prompt_style: str = "plain") -> str:
         """Format GPQA question into prompt."""
         if prompt_style == "plain":
             return PromptFormatter.format_plain_prompt(
-                question.question, 
-                question.options
+                question.question, question.options
             )
         elif prompt_style == "cot":
             return PromptFormatter.format_cot_prompt(
-                question.question, 
-                question.options
+                question.question, question.options
             )
         elif prompt_style == "explicit_cot":
             return PromptFormatter.format_explicit_cot_prompt(
-                question.question, 
-                question.options, 
-                question.cot_content
+                question.question, question.options, question.cot_content
             )
         else:
             raise ValueError(f"Unknown prompt style: {prompt_style}")
@@ -241,17 +233,20 @@ class GPQADataset(DatasetInterface):
 # Convenience classes for specific subsets
 class GPQAMainDataset(GPQADataset):
     """GPQA Main dataset."""
+
     def __init__(self):
         super().__init__(subset="gpqa_main")
 
 
 class GPQAExtendedDataset(GPQADataset):
     """GPQA Extended dataset."""
+
     def __init__(self):
         super().__init__(subset="gpqa_extended")
 
 
 class GPQADiamondDataset(GPQADataset):
     """GPQA Diamond dataset (highest quality subset)."""
+
     def __init__(self):
         super().__init__(subset="gpqa_diamond")
