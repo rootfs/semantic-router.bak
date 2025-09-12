@@ -1,3 +1,10 @@
+"""
+Dataset-agnostic reasoning benchmark for evaluating router vs direct vLLM.
+
+This refactored version supports multiple datasets through a factory pattern,
+making it easy to add new evaluation datasets.
+"""
+
 import argparse
 import json
 import os
@@ -11,23 +18,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from datasets import load_dataset
 from openai import OpenAI
 from tqdm import tqdm
 
-# This benchmark supports two usage patterns:
-# 1) Router-transparent: send a single neutral prompt; router/model decides reasoning.
-# 2) Policy evaluation: run NR (neutral), XC (explicit CoT), and optionally AR (automatic reasoning via extra_body)
-#    per question, then aggregate according to policies like Always-NR, Always-XC, CR-XC, Oracle, etc.
+from dataset_factory import DatasetFactory, list_available_datasets
+from dataset_interface import Question, DatasetInfo, questions_to_dataframe
 
 
+# Answer extraction pattern
 ANSWER_PATTERN = re.compile(r"(?:answer(?:\sis)?:?\s*)([A-J])", re.IGNORECASE)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="ReasonBench: evaluate router vs direct vLLM on MMLU-Pro with detailed metrics"
+        description="Dataset-agnostic ReasonBench: evaluate router vs direct vLLM with detailed metrics"
     )
+    
+    # Dataset selection
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="mmlu",
+        help="Dataset to evaluate on. Use --list-datasets to see available options.",
+    )
+    parser.add_argument(
+        "--list-datasets",
+        action="store_true",
+        help="List all available datasets and exit",
+    )
+    
     # Router endpoint (NR-only evaluation; router decides reasoning internally)
     parser.add_argument(
         "--router-endpoint",
@@ -89,7 +108,7 @@ def parse_args():
         help="Run vLLM direct evaluation (NR/XC with reasoning ON/OFF)",
     )
 
-    # Policy reporting options (removed)
+    # Dataset filtering options
     parser.add_argument(
         "--categories",
         type=str,
@@ -103,6 +122,8 @@ def parse_args():
         default=5,
         help="Number of questions to sample per category. If not provided, all questions will be used.",
     )
+    
+    # Execution options
     parser.add_argument(
         "--concurrent-requests",
         type=int,
@@ -146,6 +167,7 @@ def parse_args():
 
 
 def get_available_models(endpoint: str, api_key: str = "") -> List[str]:
+    """Get available models from an endpoint."""
     client = OpenAI(base_url=endpoint, api_key=api_key or None)
     try:
         models = client.models.list()
@@ -155,123 +177,8 @@ def get_available_models(endpoint: str, api_key: str = "") -> List[str]:
         return []
 
 
-def load_mmlu_pro_dataset(
-    categories: Optional[List[str]] = None,
-    samples_per_category: Optional[int] = None,
-    seed: int = 42,
-) -> Tuple[pd.DataFrame, List[str]]:
-    dataset = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
-    df = pd.DataFrame(dataset)
-
-    all_categories = sorted(df["category"].unique().tolist())
-
-    if categories:
-        df = df[df["category"].isin(categories)]
-        if df.empty:
-            valid_categories = ", ".join(all_categories)
-            raise ValueError(
-                f"No data found for specified categories. Valid categories are: {valid_categories}"
-            )
-
-    if samples_per_category:
-        random.seed(seed)
-        np.random.seed(seed)
-        sampled_dfs = []
-        for category in df["category"].unique():
-            category_df = df[df["category"] == category]
-            if len(category_df) > samples_per_category:
-                sampled_df = category_df.sample(samples_per_category, random_state=seed)
-                sampled_dfs.append(sampled_df)
-            else:
-                sampled_dfs.append(category_df)
-        df = pd.concat(sampled_dfs)
-
-    return df, all_categories
-
-
-def format_plain_prompt(question: str, options: List[str]) -> str:
-    letter_mapping = {
-        0: "A",
-        1: "B",
-        2: "C",
-        3: "D",
-        4: "E",
-        5: "F",
-        6: "G",
-        7: "H",
-        8: "I",
-        9: "J",
-    }
-    formatted_options = ""
-    for i, option in enumerate(options):
-        if option.lower() != "n/a":
-            formatted_options += f"{letter_mapping[i]}) {option}\n"
-
-    prompt = (
-        f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
-        "Please choose the correct answer from the options above. Provide your answer in the format 'Answer: [letter]'."
-    )
-    return prompt
-
-
-def format_cot_prompt(question: str, options: List[str]) -> str:
-    letter_mapping = {
-        0: "A",
-        1: "B",
-        2: "C",
-        3: "D",
-        4: "E",
-        5: "F",
-        6: "G",
-        7: "H",
-        8: "I",
-        9: "J",
-    }
-    formatted_options = ""
-    for i, option in enumerate(options):
-        if option.lower() != "n/a":
-            formatted_options += f"{letter_mapping[i]}) {option}\n"
-
-    prompt = (
-        f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
-        "Please solve this step-by-step, then provide your final answer in the format 'Answer: [letter]'."
-    )
-    return prompt
-
-
-def format_explicit_cot_prompt(
-    question: str, options: List[str], cot_content: Optional[str]
-) -> str:
-    """Use dataset CoT content explicitly alongside the question/options.
-
-    Note: This prompt includes provided CoT content to test explicit CoT behavior.
-    """
-    letter_mapping = {
-        0: "A",
-        1: "B",
-        2: "C",
-        3: "D",
-        4: "E",
-        5: "F",
-        6: "G",
-        7: "H",
-        8: "I",
-        9: "J",
-    }
-    formatted_options = ""
-    for i, option in enumerate(options):
-        if option.lower() != "n/a":
-            formatted_options += f"{letter_mapping[i]}) {option}\n"
-
-    cot_section = f"\nExplanation: {cot_content}\n" if cot_content else "\n"
-    prompt = (
-        f"Question: {question}\n\nOptions:\n{formatted_options}"
-        f"{cot_section}\nUse the explanation if helpful and provide your final answer in the format 'Answer: [letter]'."
-    )
-    return prompt
-
-
 def extract_answer(response: Any) -> Optional[str]:
+    """Extract answer from model response."""
     # Normalize non-string responses into a string to be robust to providers
     # that return structured content (e.g., lists of parts or dicts).
     if response is None:
@@ -325,6 +232,7 @@ def call_model(
     temperature: float,
     extra_body: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, bool, Optional[int], Optional[int], Optional[int]]:
+    """Call model with given parameters."""
     try:
         response = client.chat.completions.create(
             model=model,
@@ -347,11 +255,7 @@ def call_model(
 def build_extra_body_for_model(
     model_name: str, reasoning: Optional[bool]
 ) -> Optional[Dict[str, Any]]:
-    """Return an extra_body dict to toggle reasoning for a given model.
-
-    - DeepSeek v3.1: {"chat_template_kwargs": {"thinking": true/false}}
-    - GPT-OSS: {"reasoning_effort": "low|medium|high"} when ON; if not provided, then low
-    """
+    """Return an extra_body dict to toggle reasoning for a given model."""
     # reasoning: True -> ON, False -> OFF, None -> base
 
     lower = model_name.lower()
@@ -362,7 +266,6 @@ def build_extra_body_for_model(
             return {"chat_template_kwargs": {"thinking": True}}
         if reasoning is None or reasoning is False:
             return {"chat_template_kwargs": {"thinking": False}}
-        # Base: do not set thinking for DeepSeek
         return None
 
     # Qwen3 family
@@ -375,7 +278,6 @@ def build_extra_body_for_model(
 
     # GPT OSS family
     if "gpt-oss" in lower or "openai/gpt-oss" in lower or "gpt_oss" in lower:
-        # Base -> low effort, On -> provided effort (e.g., high)
         if reasoning is True:
             return {"reasoning_effort": "high"}
         if reasoning is None or reasoning is False:
@@ -388,29 +290,24 @@ def build_extra_body_for_model(
 def process_question_single(
     client: OpenAI,
     model: str,
-    question_data: Dict[str, Any],
+    question: Question,
+    dataset: Any,  # DatasetInterface
     prompt_mode: str,
     max_tokens: int,
     temperature: float,
     ar_extra_body: Optional[Dict[str, Any]] = None,
     mode_label: Optional[str] = None,
 ) -> Dict[str, Any]:
-    question = question_data["question"]
-    options = question_data["options"]
-    correct_answer = question_data["answer"]
-    cot_content = (
-        question_data.get("cot_content") if isinstance(question_data, dict) else None
-    )
-
+    """Process a single question with the model."""
+    # Format prompt based on mode
     if prompt_mode == "XC":
-        # Prefer explicit CoT content from dataset when available
-        prompt = format_explicit_cot_prompt(question, options, cot_content)
+        prompt = dataset.format_prompt(question, "explicit_cot")
         extra_body = None
     elif prompt_mode == "AR":
-        prompt = format_plain_prompt(question, options)
+        prompt = dataset.format_prompt(question, "plain")
         extra_body = ar_extra_body
     else:  # NR or Router-Transparent
-        prompt = format_plain_prompt(question, options)
+        prompt = dataset.format_prompt(question, "plain")
         extra_body = None
 
     start_time = time.time()
@@ -420,16 +317,16 @@ def process_question_single(
     end_time = time.time()
 
     predicted_answer = extract_answer(response_text) if success else None
-    is_correct = (predicted_answer == correct_answer) if predicted_answer else False
+    is_correct = (predicted_answer == question.correct_answer) if predicted_answer else False
 
     return {
         "mode": prompt_mode,
         "mode_label": mode_label or prompt_mode,
-        "question_id": question_data["question_id"],
-        "category": question_data["category"],
-        "question": question,
-        "options": options,
-        "correct_answer": correct_answer,
+        "question_id": question.question_id,
+        "category": question.category,
+        "question": question.question,
+        "options": question.options,
+        "correct_answer": question.correct_answer,
         "model_response": response_text,
         "predicted_answer": predicted_answer,
         "is_correct": is_correct,
@@ -442,7 +339,8 @@ def process_question_single(
 
 
 def evaluate_model_router_transparent(
-    df: pd.DataFrame,
+    questions: List[Question],
+    dataset: Any,  # DatasetInterface
     model: str,
     endpoint: str,
     api_key: str,
@@ -450,21 +348,22 @@ def evaluate_model_router_transparent(
     max_tokens: int,
     temperature: float,
 ) -> pd.DataFrame:
+    """Evaluate model in router-transparent mode."""
     client = OpenAI(base_url=endpoint, api_key=api_key or None)
     print(f"Using model: {model}, endpoint: {endpoint}")
 
     results: List[Dict[str, Any]] = []
-    questions_data = df.to_dict("records")
 
     with ThreadPoolExecutor(max_workers=concurrent_requests) as executor:
         futures = []
-        for question_data in questions_data:
+        for question in questions:
             futures.append(
                 executor.submit(
                     process_question_single,
                     client,
                     model,
-                    question_data,
+                    question,
+                    dataset,
                     "NR",
                     max_tokens,
                     temperature,
@@ -482,7 +381,8 @@ def evaluate_model_router_transparent(
 
 
 def evaluate_model_vllm_multimode(
-    df: pd.DataFrame,
+    questions: List[Question],
+    dataset: Any,  # DatasetInterface
     model: str,
     endpoint: str,
     api_key: str,
@@ -496,7 +396,6 @@ def evaluate_model_vllm_multimode(
     print(f"Using vLLM model: {model}, endpoint: {endpoint}")
 
     results: List[Dict[str, Any]] = []
-    questions_data = df.to_dict("records")
 
     # Define mode variants: (label, prompt_mode, reasoning_flag)
     mode_variants: List[Tuple[str, str, Optional[bool]]] = []
@@ -518,7 +417,7 @@ def evaluate_model_vllm_multimode(
                 ]
             )
 
-    def run_variants(q: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def run_variants(q: Question) -> List[Dict[str, Any]]:
         local_records: List[Dict[str, Any]] = []
         for label, prompt_mode, reasoning_flag in mode_variants:
             extra_body = build_extra_body_for_model(model, reasoning_flag)
@@ -526,6 +425,7 @@ def evaluate_model_vllm_multimode(
                 client,
                 model,
                 q,
+                dataset,
                 prompt_mode,
                 max_tokens,
                 temperature,
@@ -536,7 +436,7 @@ def evaluate_model_vllm_multimode(
         return local_records
 
     with ThreadPoolExecutor(max_workers=concurrent_requests) as executor:
-        futures = [executor.submit(run_variants, q) for q in questions_data]
+        futures = [executor.submit(run_variants, q) for q in questions]
         for future in tqdm(
             futures, total=len(futures), desc=f"Evaluating {model} (vLLM modes)"
         ):
@@ -545,132 +445,8 @@ def evaluate_model_vllm_multimode(
     return pd.DataFrame(results)
 
 
-def evaluate_model_policies(
-    df: pd.DataFrame,
-    model: str,
-    endpoint: str,
-    api_key: str,
-    concurrent_requests: int,
-    max_tokens: int,
-    temperature: float,
-    exec_modes: List[str],
-    ar_extra_body: Optional[Dict[str, Any]],
-) -> Tuple[pd.DataFrame, Dict[str, Dict[str, Any]]]:
-    client = OpenAI(base_url=endpoint, api_key=api_key or None)
-    print(f"Using model: {model}, endpoint: {endpoint}")
-
-    # Run NR/XC/AR for each question to enable Oracle and policy simulation
-    per_call_records: List[Dict[str, Any]] = []
-    questions = df.to_dict("records")
-
-    def run_all_modes(q: Dict[str, Any]) -> List[Dict[str, Any]]:
-        records: List[Dict[str, Any]] = []
-        # NR
-        records.append(
-            process_question_single(
-                client, model, q, "NR", max_tokens, temperature, None
-            )
-        )
-        # XC
-        records.append(
-            process_question_single(
-                client, model, q, "XC", max_tokens, temperature, None
-            )
-        )
-        # AR (optional)
-        if ar_extra_body is not None:
-            records.append(
-                process_question_single(
-                    client, model, q, "AR", max_tokens, temperature, ar_extra_body
-                )
-            )
-        return records
-
-    with ThreadPoolExecutor(max_workers=concurrent_requests) as executor:
-        futures = [executor.submit(run_all_modes, q) for q in questions]
-        for future in tqdm(
-            futures, total=len(futures), desc=f"Evaluating {model} (policies)"
-        ):
-            per_call_records.extend(future.result())
-
-    calls_df = pd.DataFrame(per_call_records)
-
-    # Organize records by question_id
-    grouped: Dict[str, pd.DataFrame] = {
-        qid: sub for qid, sub in calls_df.groupby("question_id")
-    }
-
-    def choose_oracle(sub: pd.DataFrame) -> pd.Series:
-        # Pick best correctness; tie-break by lower total_tokens then lower latency
-        sub = sub.copy()
-        sub["correct_int"] = sub["is_correct"].astype(int)
-        # Replace NaNs for tie-breakers with large values
-        sub["total_tokens_fill"] = sub["total_tokens"].fillna(1e9)
-        sub["latency_fill"] = sub["response_time"].fillna(1e9)
-        sub = sub.sort_values(
-            by=["correct_int", "total_tokens_fill", "latency_fill"],
-            ascending=[False, True, True],
-        )
-        return sub.iloc[0]
-
-    def pick_by_policy(sub: pd.DataFrame, policy: str) -> pd.Series:
-        if policy == "Always-NR":
-            return sub[sub["mode"] == "NR"].iloc[0]
-        if policy == "Always-XC":
-            return sub[sub["mode"] == "XC"].iloc[0]
-        if policy == "Always-AR":
-            return sub[sub["mode"] == "AR"].iloc[0]
-        if policy == "Oracle":
-            return choose_oracle(sub)
-        # Router-Transparent: just NR call here; handled elsewhere in router-transparent path
-        return sub[sub["mode"] == "NR"].iloc[0]
-
-    # Compute per-policy selections and metrics
-    policies_to_compute = [m for m in exec_modes if m != "Router-Transparent"]
-    policy_rows: Dict[str, List[pd.Series]] = {name: [] for name in policies_to_compute}
-
-    for qid, sub in grouped.items():
-        available_modes = set(sub["mode"].tolist())
-        for policy in list(policy_rows.keys()):
-            if "AR" in policy and "AR" not in available_modes:
-                # Skip AR policies if AR not available
-                continue
-            try:
-                chosen = pick_by_policy(sub, policy)
-                policy_rows[policy].append(chosen)
-            except Exception:
-                continue
-
-    policy_metrics: Dict[str, Dict[str, Any]] = {}
-    for policy, rows in policy_rows.items():
-        if not rows:
-            continue
-        dfp = pd.DataFrame(rows)
-        metrics = analyze_results(dfp)
-        # Regret vs Oracle
-        oracle_rows = [choose_oracle(sub) for _, sub in grouped.items()]
-        oracle_df = pd.DataFrame(oracle_rows)
-        metrics["regret_accuracy"] = (
-            (oracle_df["is_correct"].mean() - dfp["is_correct"].mean())
-            if not dfp.empty
-            else 0.0
-        )
-        metrics["regret_tokens"] = (
-            (
-                oracle_df["total_tokens"].dropna().mean()
-                - dfp["total_tokens"].dropna().mean()
-            )
-            if not dfp["total_tokens"].dropna().empty
-            and not oracle_df["total_tokens"].dropna().empty
-            else None
-        )
-
-        policy_metrics[policy] = metrics
-
-    return calls_df, policy_metrics
-
-
 def analyze_results(results_df: pd.DataFrame) -> Dict[str, Any]:
+    """Analyze results and compute metrics."""
     valid = results_df[results_df["success"]]
     overall_acc = valid["is_correct"].mean() if not valid.empty else 0.0
 
@@ -737,115 +513,6 @@ def analyze_results(results_df: pd.DataFrame) -> Dict[str, Any]:
                 ),
             }
 
-    # Per-category metrics by mode and ranges across modes
-    category_by_mode: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    category_ranges: Dict[str, Dict[str, Dict[str, float]]] = {}
-    if (
-        "mode_label" in valid.columns
-        and "category" in valid.columns
-        and not valid.empty
-    ):
-        grouped = (
-            valid.groupby(["category", "mode_label"]).agg(
-                accuracy=("is_correct", "mean"),
-                avg_response_time=("response_time", "mean"),
-                avg_prompt_tokens=("prompt_tokens", "mean"),
-                avg_completion_tokens=("completion_tokens", "mean"),
-                avg_total_tokens=("total_tokens", "mean"),
-            )
-        ).reset_index()
-
-        # Build nested dict {category: {mode_label: metrics}}
-        for cat in grouped["category"].unique():
-            cat_df = grouped[grouped["category"] == cat]
-            mode_dict: Dict[str, Dict[str, Any]] = {}
-            for _, row in cat_df.iterrows():
-                mode_label = str(row["mode_label"])  # ensure JSON-safe key
-                mode_dict[mode_label] = {
-                    "accuracy": (
-                        float(row["accuracy"]) if pd.notna(row["accuracy"]) else 0.0
-                    ),
-                    "avg_response_time": (
-                        float(row["avg_response_time"])
-                        if pd.notna(row["avg_response_time"])
-                        else 0.0
-                    ),
-                    "avg_prompt_tokens": (
-                        float(row["avg_prompt_tokens"])
-                        if pd.notna(row["avg_prompt_tokens"])
-                        else None
-                    ),
-                    "avg_completion_tokens": (
-                        float(row["avg_completion_tokens"])
-                        if pd.notna(row["avg_completion_tokens"])
-                        else None
-                    ),
-                    "avg_total_tokens": (
-                        float(row["avg_total_tokens"])
-                        if pd.notna(row["avg_total_tokens"])
-                        else None
-                    ),
-                }
-            category_by_mode[cat] = mode_dict
-
-            # Compute ranges (min/max across modes) for selected metrics
-            def _mm(values: List[float]) -> Dict[str, float]:
-                if not values:
-                    return {"min": 0.0, "max": 0.0}
-                return {
-                    "min": float(np.nanmin(values)),
-                    "max": float(np.nanmax(values)),
-                }
-
-            acc_vals = [
-                v.get("accuracy", 0.0)
-                for v in mode_dict.values()
-                if v.get("accuracy") is not None
-            ]
-            lat_vals = [
-                v.get("avg_response_time", 0.0)
-                for v in mode_dict.values()
-                if v.get("avg_response_time") is not None
-            ]
-            tok_vals = [
-                v.get("avg_total_tokens")
-                for v in mode_dict.values()
-                if v.get("avg_total_tokens") is not None
-            ]
-            category_ranges[cat] = {
-                "accuracy": _mm(acc_vals),
-                "avg_response_time": _mm(lat_vals),
-                "avg_total_tokens": _mm(tok_vals),
-            }
-
-    # Overall ranges across modes (not per-category)
-    mode_ranges: Dict[str, Dict[str, float]] = {}
-    if by_mode:
-
-        def _mm(values: List[float]) -> Dict[str, float]:
-            if not values:
-                return {"min": 0.0, "max": 0.0}
-            return {"min": float(np.nanmin(values)), "max": float(np.nanmax(values))}
-
-        acc_vals = [
-            m["accuracy"] for m in by_mode.values() if m.get("accuracy") is not None
-        ]
-        lat_vals = [
-            m["avg_response_time"]
-            for m in by_mode.values()
-            if m.get("avg_response_time") is not None
-        ]
-        tok_vals = [
-            m.get("avg_total_tokens")
-            for m in by_mode.values()
-            if m.get("avg_total_tokens") is not None
-        ]
-        mode_ranges = {
-            "accuracy": _mm(acc_vals),
-            "avg_response_time": _mm(lat_vals),
-            "avg_total_tokens": _mm(tok_vals),
-        }
-
     return {
         "overall_accuracy": float(overall_acc),
         "category_metrics": category_metrics,
@@ -863,9 +530,6 @@ def analyze_results(results_df: pd.DataFrame) -> Dict[str, Any]:
         "successful_queries": int(len(valid)),
         "failed_queries": int(len(results_df) - len(valid)),
         "by_mode": by_mode,
-        "category_by_mode": category_by_mode,
-        "category_ranges": category_ranges,
-        "mode_ranges": mode_ranges,
     }
 
 
@@ -873,10 +537,12 @@ def save_results(
     results_df: pd.DataFrame,
     analysis: Dict[str, Any],
     model: str,
+    dataset_name: str,
     output_dir: str,
 ):
+    """Save results to files."""
     model_name = model.replace("/", "_")
-    model_dir = os.path.join(output_dir, model_name)
+    model_dir = os.path.join(output_dir, f"{dataset_name}_{model_name}")
     os.makedirs(model_dir, exist_ok=True)
 
     results_df.to_csv(os.path.join(model_dir, "detailed_results.csv"), index=False)
@@ -885,6 +551,7 @@ def save_results(
         json.dump(
             {
                 "model": model,
+                "dataset": dataset_name,
                 **analysis,
             },
             f,
@@ -892,7 +559,7 @@ def save_results(
         )
 
     print("\n" + "=" * 50)
-    print(f"Model: {model}")
+    print(f"Model: {model} | Dataset: {dataset_name}")
     print(f"Overall Accuracy: {analysis['overall_accuracy']:.4f}")
     print(f"Total Questions: {analysis['total_questions']}")
     print(f"Successful Queries: {analysis['successful_queries']}")
@@ -914,81 +581,38 @@ def save_results(
             )
         print()
 
-    # Charts
-    try:
-        os.makedirs(model_dir, exist_ok=True)
-        # Per-category accuracy by mode (if multi-mode)
-        dfp = results_df[results_df["success"]].copy()
-        agg_cols = [
-            ("accuracy", "is_correct", "mean"),
-            ("avg_latency", "response_time", "mean"),
-            ("avg_total_tokens", "total_tokens", "mean"),
-        ]
-        if not dfp.empty and "mode_label" in dfp.columns:
-            grouped = dfp.groupby(["category", "mode_label"]).agg(
-                {c: f for _, c, f in agg_cols}
-            )
-            grouped.columns = [a for a, _, _ in agg_cols]
-            grouped = grouped.reset_index()
-            # Accuracy chart
-            plt.figure(figsize=(14, 7))
-            sns.barplot(data=grouped, x="category", y="accuracy", hue="mode_label")
-            plt.title(f"Per-category accuracy by mode: {model}")
-            plt.xticks(rotation=90)
-            plt.tight_layout()
-            plt.savefig(os.path.join(model_dir, "category_accuracy_by_mode.png"))
-            plt.close()
-
-            # Latency chart
-            plt.figure(figsize=(14, 7))
-            sns.barplot(data=grouped, x="category", y="avg_latency", hue="mode_label")
-            plt.title(f"Per-category latency by mode: {model}")
-            plt.xticks(rotation=90)
-            plt.tight_layout()
-            plt.savefig(os.path.join(model_dir, "category_latency_by_mode.png"))
-            plt.close()
-
-            # Tokens chart
-            plt.figure(figsize=(14, 7))
-            sns.barplot(
-                data=grouped, x="category", y="avg_total_tokens", hue="mode_label"
-            )
-            plt.title(f"Per-category total tokens by mode: {model}")
-            plt.xticks(rotation=90)
-            plt.tight_layout()
-            plt.savefig(os.path.join(model_dir, "category_tokens_by_mode.png"))
-            plt.close()
-    except Exception as e:
-        print(f"Plot generation failed: {e}")
-
-
-def save_policy_results(
-    calls_df: pd.DataFrame,
-    policy_metrics: Dict[str, Dict[str, Any]],
-    model: str,
-    output_dir: str,
-):
-    model_name = model.replace("/", "_")
-    model_dir = os.path.join(output_dir, f"{model_name}_policies")
-    os.makedirs(model_dir, exist_ok=True)
-
-    # Save raw calls
-    calls_df.to_csv(os.path.join(model_dir, "per_call_results.csv"), index=False)
-
-    with open(os.path.join(model_dir, "policy_metrics.json"), "w") as f:
-        json.dump(policy_metrics, f, indent=2)
-
-    print("\nPolicy Metrics:")
-    for name, metrics in policy_metrics.items():
-        print(
-            f"- {name}: acc={metrics['overall_accuracy']:.4f}, avg_tokens={metrics['avg_total_tokens']}, avg_latency={metrics['avg_response_time']:.2f}s"
-        )
-
 
 def main():
     args = parse_args()
 
-    # Resolve router endpoint/key
+    # Handle dataset listing
+    if args.list_datasets:
+        list_available_datasets()
+        return
+
+    # Set random seeds
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
+    # Load dataset
+    print(f"Loading dataset: {args.dataset}")
+    try:
+        dataset = DatasetFactory.create_dataset(args.dataset)
+        questions, dataset_info = dataset.load_dataset(
+            categories=args.categories,
+            samples_per_category=args.samples_per_category,
+            seed=args.seed,
+        )
+        print(f"Dataset loaded: {len(questions)} questions across {len(dataset_info.categories)} categories")
+        print(f"Categories: {', '.join(dataset_info.categories)}")
+        
+    except Exception as e:
+        print(f"Error loading dataset '{args.dataset}': {e}")
+        print("\nAvailable datasets:")
+        list_available_datasets()
+        return
+
+    # Resolve endpoints and models
     router_endpoint = (
         args.router_endpoint
         or os.environ.get("ROUTER_ENDPOINT")
@@ -1001,7 +625,6 @@ def main():
         or "1234"
     )
 
-    # Resolve vLLM endpoint/key
     vllm_endpoint = args.vllm_endpoint or os.environ.get("VLLM_ENDPOINT", "")
     vllm_api_key = (
         args.vllm_api_key
@@ -1009,9 +632,6 @@ def main():
         or os.environ.get("OPENAI_API_KEY")
         or ""
     )
-
-    random.seed(args.seed)
-    np.random.seed(args.seed)
 
     router_models = args.router_models
     if router_models and len(router_models) == 1 and "," in router_models[0]:
@@ -1034,33 +654,14 @@ def main():
 
     print(f"Router models: {router_models}")
     print(f"vLLM models: {vllm_models}")
-    print("Loading MMLU-Pro dataset...")
-    df, all_categories = load_mmlu_pro_dataset(
-        categories=args.categories,
-        samples_per_category=args.samples_per_category,
-        seed=args.seed,
-    )
-
-    if args.categories is None:
-        print(f"Available categories: {all_categories}")
-
-    print(f"Dataset loaded: {len(df)} questions")
-
-    # Prepare AR extra_body if provided
-    ar_extra_body = None
-    if args.ar_extra_body:
-        try:
-            ar_extra_body = json.loads(args.ar_extra_body)
-        except Exception as e:
-            print(f"Failed to parse --ar-extra-body JSON: {e}")
-            ar_extra_body = None
 
     # Router evaluation (NR-only)
     if args.run_router and router_endpoint and router_models:
         for model in router_models:
             print(f"\nEvaluating router model: {model}")
             rt_df = evaluate_model_router_transparent(
-                df=df,
+                questions=questions,
+                dataset=dataset,
                 model=model,
                 endpoint=router_endpoint,
                 api_key=router_api_key,
@@ -1073,6 +674,7 @@ def main():
                 results_df=rt_df,
                 analysis=analysis,
                 model=f"router::{model}",
+                dataset_name=dataset_info.name,
                 output_dir=args.output_dir,
             )
 
@@ -1081,7 +683,8 @@ def main():
         for model in vllm_models:
             print(f"\nEvaluating vLLM model: {model}")
             vdf = evaluate_model_vllm_multimode(
-                df=df,
+                questions=questions,
+                dataset=dataset,
                 model=model,
                 endpoint=vllm_endpoint,
                 api_key=vllm_api_key,
@@ -1095,6 +698,7 @@ def main():
                 results_df=vdf,
                 analysis=analysis,
                 model=f"vllm::{model}",
+                dataset_name=dataset_info.name,
                 output_dir=args.output_dir,
             )
 

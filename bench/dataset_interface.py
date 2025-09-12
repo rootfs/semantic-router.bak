@@ -1,0 +1,188 @@
+"""
+Dataset interface and factory for benchmark evaluation.
+
+This module provides abstract base classes and factory patterns to support
+multiple evaluation datasets in a unified way.
+"""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+import pandas as pd
+
+
+@dataclass
+class Question:
+    """Standardized question format across all datasets."""
+    question_id: str
+    category: str
+    question: str
+    options: List[str]
+    correct_answer: str
+    cot_content: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class DatasetInfo:
+    """Information about a dataset."""
+    name: str
+    description: str
+    categories: List[str]
+    total_questions: int
+    format_type: str  # "multiple_choice", "open_ended", etc.
+    difficulty_level: str  # "elementary", "undergraduate", "graduate", etc.
+
+
+class DatasetInterface(ABC):
+    """Abstract base class for all dataset implementations."""
+    
+    @abstractmethod
+    def load_dataset(
+        self, 
+        categories: Optional[List[str]] = None,
+        samples_per_category: Optional[int] = None,
+        seed: int = 42
+    ) -> Tuple[List[Question], DatasetInfo]:
+        """Load and return questions from the dataset.
+        
+        Args:
+            categories: List of categories to filter by. If None, load all.
+            samples_per_category: Max samples per category. If None, load all.
+            seed: Random seed for reproducible sampling.
+            
+        Returns:
+            Tuple of (questions_list, dataset_info)
+        """
+        pass
+    
+    @abstractmethod
+    def get_available_categories(self) -> List[str]:
+        """Get list of all available categories in the dataset."""
+        pass
+    
+    @abstractmethod
+    def format_prompt(
+        self, 
+        question: Question, 
+        prompt_style: str = "plain"
+    ) -> str:
+        """Format a question into a prompt string.
+        
+        Args:
+            question: Question object to format
+            prompt_style: Style of prompt ("plain", "cot", "explicit_cot")
+            
+        Returns:
+            Formatted prompt string
+        """
+        pass
+    
+    @property
+    @abstractmethod
+    def dataset_name(self) -> str:
+        """Return the name of this dataset."""
+        pass
+    
+    @property
+    @abstractmethod
+    def supports_cot(self) -> bool:
+        """Return True if dataset has chain-of-thought content."""
+        pass
+
+
+class PromptFormatter:
+    """Utility class for formatting prompts consistently across datasets."""
+    
+    @staticmethod
+    def get_letter_mapping() -> Dict[int, str]:
+        """Get standard A-J letter mapping for options."""
+        return {
+            0: "A", 1: "B", 2: "C", 3: "D", 4: "E",
+            5: "F", 6: "G", 7: "H", 8: "I", 9: "J"
+        }
+    
+    @staticmethod
+    def format_options(options: List[str]) -> str:
+        """Format options list into lettered format."""
+        letter_mapping = PromptFormatter.get_letter_mapping()
+        formatted = ""
+        for i, option in enumerate(options):
+            if option.lower() != "n/a":
+                formatted += f"{letter_mapping[i]}) {option}\n"
+        return formatted.rstrip()
+    
+    @staticmethod
+    def format_plain_prompt(question: str, options: List[str]) -> str:
+        """Format a basic multiple choice prompt."""
+        formatted_options = PromptFormatter.format_options(options)
+        return (
+            f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
+            "Please choose the correct answer from the options above. "
+            "Provide your answer in the format 'Answer: [letter]'."
+        )
+    
+    @staticmethod
+    def format_cot_prompt(question: str, options: List[str]) -> str:
+        """Format a chain-of-thought prompt."""
+        formatted_options = PromptFormatter.format_options(options)
+        return (
+            f"Question: {question}\n\nOptions:\n{formatted_options}\n\n"
+            "Please solve this step-by-step, then provide your final answer "
+            "in the format 'Answer: [letter]'."
+        )
+    
+    @staticmethod
+    def format_explicit_cot_prompt(
+        question: str, 
+        options: List[str], 
+        cot_content: Optional[str]
+    ) -> str:
+        """Format a prompt with explicit CoT content."""
+        formatted_options = PromptFormatter.format_options(options)
+        cot_section = f"\nExplanation: {cot_content}\n" if cot_content else "\n"
+        return (
+            f"Question: {question}\n\nOptions:\n{formatted_options}"
+            f"{cot_section}\nUse the explanation if helpful and provide your "
+            "final answer in the format 'Answer: [letter]'."
+        )
+
+
+def questions_to_dataframe(questions: List[Question]) -> pd.DataFrame:
+    """Convert list of Question objects to pandas DataFrame for compatibility."""
+    records = []
+    for q in questions:
+        record = {
+            'question_id': q.question_id,
+            'category': q.category,
+            'question': q.question,
+            'options': q.options,
+            'answer': q.correct_answer,
+            'cot_content': q.cot_content,
+        }
+        # Add metadata fields if present
+        if q.metadata:
+            record.update(q.metadata)
+        records.append(record)
+    return pd.DataFrame(records)
+
+
+def dataframe_to_questions(df: pd.DataFrame) -> List[Question]:
+    """Convert pandas DataFrame back to list of Question objects."""
+    questions = []
+    for _, row in df.iterrows():
+        # Extract metadata (any columns not in the standard Question fields)
+        standard_fields = {'question_id', 'category', 'question', 'options', 'answer', 'cot_content'}
+        metadata = {k: v for k, v in row.items() if k not in standard_fields and pd.notna(v)}
+        
+        question = Question(
+            question_id=str(row['question_id']),
+            category=str(row['category']),
+            question=str(row['question']),
+            options=row['options'] if isinstance(row['options'], list) else [],
+            correct_answer=str(row['answer']),
+            cot_content=row.get('cot_content') if pd.notna(row.get('cot_content')) else None,
+            metadata=metadata if metadata else None
+        )
+        questions.append(question)
+    return questions
