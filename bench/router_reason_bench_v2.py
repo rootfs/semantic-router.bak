@@ -175,13 +175,17 @@ def get_dataset_optimal_tokens(dataset_info):
     
     # Dataset-specific token limits based on complexity and reasoning requirements
     if 'gpqa' in dataset_name:
-        return 400  # Graduate-level complex reasoning
+        return 500  # Graduate-level complex reasoning needs completion space
     elif 'truthfulqa' in dataset_name:
         return 250  # Nuanced, potentially tricky questions
     elif 'mmlu' in dataset_name and difficulty == 'undergraduate':
         return 150  # Professional knowledge, direct answers
-    elif dataset_name in ['hellaswag', 'arc', 'commonsenseqa']:
+    elif 'hellaswag' in dataset_name:
+        return 250  # Needs tokens for complete reasoning and structured response
+    elif 'arc' in dataset_name:
         return 180  # Moderate reasoning required
+    elif 'commonsenseqa' in dataset_name:
+        return 300  # Needs more tokens for complete reasoning
     else:
         # Default based on difficulty level
         if difficulty == 'hard' or difficulty == 'graduate':
