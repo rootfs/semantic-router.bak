@@ -226,6 +226,20 @@ class ARCDataset(DatasetInterface):
             else:
                 options = []
 
+            # Convert answer key from letter to index
+            answer_key = str(row["answerKey"])
+            if len(options) > 0 and answer_key in "ABCDEFGHIJ":
+                correct_answer_index = ord(answer_key) - ord("A")
+                # Ensure the index is within bounds
+                if correct_answer_index >= len(options):
+                    correct_answer_index = None
+            else:
+                correct_answer_index = None
+
+            # Skip questions with invalid answer keys
+            if correct_answer_index is None:
+                continue
+
             # Infer category from question content
             category = self._extract_subject_from_question(row["question"], options)
 
@@ -234,7 +248,7 @@ class ARCDataset(DatasetInterface):
                 category=category,
                 question=str(row["question"]),
                 options=options,
-                correct_answer=str(row["answerKey"]),
+                correct_answer=correct_answer_index,  # Now an integer index
                 cot_content=None,  # ARC doesn't have CoT
                 metadata={
                     "source": "ARC",

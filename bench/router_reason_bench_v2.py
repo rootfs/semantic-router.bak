@@ -183,7 +183,7 @@ def get_dataset_optimal_tokens(dataset_info):
     elif 'hellaswag' in dataset_name:
         return 250  # Needs tokens for complete reasoning and structured response
     elif 'arc' in dataset_name:
-        return 180  # Moderate reasoning required
+        return 220  # Moderate reasoning requires more completion space
     elif 'commonsenseqa' in dataset_name:
         return 300  # Needs more tokens for complete reasoning
     else:
