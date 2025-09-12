@@ -86,6 +86,39 @@ python3 router_reason_bench_v2.py \
     --run-vllm
 
 echo ""
+echo "🎨 PHASE 3: GENERATING COMPARISON PLOTS"
+echo "----------------------------------------"
+
+# Generate plots comparing router vs vLLM
+ROUTER_RESULT=$(find "$OUTPUT_DIR" -name "*router*auto*" -type d | head -1)
+VLLM_RESULT=$(find "$OUTPUT_DIR" -name "*vllm*gpt-oss*" -type d | head -1)
+
+if [ -n "$ROUTER_RESULT" ] && [ -f "$ROUTER_RESULT/summary.json" ] && [ -n "$VLLM_RESULT" ] && [ -f "$VLLM_RESULT/summary.json" ]; then
+    echo "Creating comparison plots (router plotted first for visibility)..."
+    
+    # Create plots directory
+    PLOTS_DIR="$OUTPUT_DIR/plots"
+    mkdir -p "$PLOTS_DIR"
+    
+    # Generate vLLM plots with router overlay (router plotted first)
+    python3 bench_plot.py \
+        --summary "$VLLM_RESULT/summary.json" \
+        --router-summary "$ROUTER_RESULT/summary.json" \
+        --out-dir "$PLOTS_DIR" \
+        --metrics accuracy avg_response_time avg_total_tokens \
+        --font-scale 1.4 \
+        --dpi 300
+    
+    echo "✅ Plots generated in: $PLOTS_DIR"
+    echo "   - bench_plot_accuracy.png (+ PDF)"
+    echo "   - bench_plot_avg_response_time.png (+ PDF)" 
+    echo "   - bench_plot_avg_total_tokens.png (+ PDF)"
+    echo "   📊 Router trend lines plotted first to remain visible even with overlapping dots"
+else
+    echo "⚠️  Skipping plots - missing result files"
+fi
+
+echo ""
 echo "📊 BENCHMARK COMPLETED!"
 echo "======================="
 echo "Results saved to: $OUTPUT_DIR"
@@ -144,8 +177,21 @@ echo "🔍 DETAILED ANALYSIS:"
 echo "--------------------"
 echo "- Router results: $ROUTER_RESULT"
 echo "- vLLM results: $VLLM_RESULT"
+echo "- Comparison plots: $OUTPUT_DIR/plots/"
 echo "- Compare CSV files for detailed question-by-question analysis"
 echo "- Check summary.json files for comprehensive metrics"
+echo ""
+
+echo "📊 VISUALIZATION FILES:"
+echo "----------------------"
+if [ -d "$OUTPUT_DIR/plots" ]; then
+    echo "- Accuracy comparison: $OUTPUT_DIR/plots/bench_plot_accuracy.png"
+    echo "- Response time comparison: $OUTPUT_DIR/plots/bench_plot_avg_response_time.png"
+    echo "- Token usage comparison: $OUTPUT_DIR/plots/bench_plot_avg_total_tokens.png"
+    echo "- PDF versions also available in same directory"
+else
+    echo "- No plots generated (check for errors above)"
+fi
 echo ""
 
 echo "✅ Benchmark comparison complete!"

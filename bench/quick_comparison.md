@@ -37,8 +37,8 @@ python3 router_reason_bench_v2.py \
 - **Endpoint**: `http://127.0.0.1:8000/v1` (direct vLLM)
 - **Model**: `openai/gpt-oss-20b` (specific model)
 - **API Key**: `1234` (default)
-- **Modes**: NR (neutral), XC (explicit CoT)
-- **Purpose**: Tests the raw model performance
+- **Modes**: 3 realistic scenarios (NR, XC, NR_REASONING)
+- **Purpose**: Tests the raw model performance with scientific controls
 
 ```bash
 python3 router_reason_bench_v2.py \
@@ -47,8 +47,7 @@ python3 router_reason_bench_v2.py \
     --run-vllm \
     --vllm-endpoint http://127.0.0.1:8000/v1 \
     --vllm-api-key 1234 \
-    --vllm-models openai/gpt-oss-20b \
-    --vllm-exec-modes NR XC
+    --vllm-models openai/gpt-oss-20b
 ```
 
 ## 🎯 Available Datasets
@@ -78,7 +77,14 @@ python3 router_reason_bench_v2.py \
 The script will create timestamped results in `results/comparison_YYYYMMDD_HHMMSS/`:
 - Router results: `*router*auto*/`
 - vLLM results: `*vllm*gpt-oss*/`
+- **Comparison plots**: `plots/` directory with visual comparisons
 - Each contains `summary.json` and `detailed_results.csv`
+
+### 📊 Generated Visualizations
+- `plots/bench_plot_accuracy.png` - Accuracy comparison by category
+- `plots/bench_plot_avg_response_time.png` - Response time comparison
+- `plots/bench_plot_avg_total_tokens.png` - Token usage comparison
+- PDF versions of all plots are also generated
 
 Compare:
 - **Accuracy**: Overall correctness

@@ -95,7 +95,7 @@ def parse_args():
         type=str,
         nargs="+",
         default=["NR", "XC"],
-        help="Prompt styles to run on vLLM: NR (neutral), XC (explicit CoT)",
+        help="DEPRECATED: vLLM now runs 3 fixed realistic modes: NR (plain), XC (CoT), NR_REASONING (plain+toggle)",
     )
     parser.add_argument(
         "--run-router",
@@ -105,7 +105,7 @@ def parse_args():
     parser.add_argument(
         "--run-vllm",
         action="store_true",
-        help="Run vLLM direct evaluation (NR/XC with reasoning ON/OFF)",
+        help="Run vLLM direct evaluation (3 realistic modes: NR, XC, NR_REASONING)",
     )
 
     # Dataset filtering options
@@ -255,8 +255,12 @@ def call_model(
 def build_extra_body_for_model(
     model_name: str, reasoning: Optional[bool]
 ) -> Optional[Dict[str, Any]]:
-    """Return an extra_body dict to toggle reasoning for a given model."""
-    # reasoning: True -> ON, False -> OFF, None -> base
+    """Return an extra_body dict to toggle reasoning for a given model.
+
+    - DeepSeek v3.1: {"chat_template_kwargs": {"thinking": true/false}}
+    - GPT-OSS: {"reasoning_effort": "low|medium|high"} when ON; if not provided, then low
+    """
+    # reasoning: True -> ON, False -> OFF, None -> base (default behavior)
 
     lower = model_name.lower()
     if (("ds" in lower) or ("deepseek" in lower)) and (
@@ -264,9 +268,11 @@ def build_extra_body_for_model(
     ):
         if reasoning is True:
             return {"chat_template_kwargs": {"thinking": True}}
-        if reasoning is None or reasoning is False:
+        elif reasoning is False:
             return {"chat_template_kwargs": {"thinking": False}}
-        return None
+        else:  # reasoning is None (base mode)
+            # Base: do not set thinking for DeepSeek - let it use default behavior
+            return None
 
     # Qwen3 family
     if "qwen3" in lower:
@@ -280,9 +286,11 @@ def build_extra_body_for_model(
     if "gpt-oss" in lower or "openai/gpt-oss" in lower or "gpt_oss" in lower:
         if reasoning is True:
             return {"reasoning_effort": "high"}
-        if reasoning is None or reasoning is False:
+        elif reasoning is False:
             return {"reasoning_effort": "low"}
-        return None
+        else:  # reasoning is None (base mode)
+            # Base: do not set reasoning_effort - let it use default behavior
+            return None
 
     return None
 
@@ -391,36 +399,46 @@ def evaluate_model_vllm_multimode(
     temperature: float,
     exec_modes: List[str],
 ) -> pd.DataFrame:
-    """Run vLLM with NR/XC prompts and reasoning ON/OFF variants."""
-    client = OpenAI(base_url=endpoint, api_key=api_key or None)
+    """Run vLLM with 3 realistic reasoning scenarios.
+    
+    The 3 scenarios represent real-world router decision patterns:
+    1. NR - Plain prompt, no reasoning toggle (fast baseline)
+    2. XC - CoT prompt, no reasoning toggle (prompt-based reasoning)  
+    3. NR_REASONING - Plain prompt, reasoning toggle ON (model-based reasoning)
+    """
+    client = OpenAI(base_url=endpoint, api_key=api_key or "dummy-key")
     print(f"Using vLLM model: {model}, endpoint: {endpoint}")
 
     results: List[Dict[str, Any]] = []
 
-    # Define mode variants: (label, prompt_mode, reasoning_flag)
-    mode_variants: List[Tuple[str, str, Optional[bool]]] = []
-    for m in exec_modes:
-        if m.upper() == "NR":
-            mode_variants.extend(
-                [
-                    ("VLLM_NR_base", "NR", None),
-                    ("VLLM_NR_reason_on", "NR", True),
-                    ("VLLM_NR_reason_off", "NR", False),
-                ]
-            )
-        elif m.upper() == "XC":
-            mode_variants.extend(
-                [
-                    ("VLLM_XC_base", "XC", None),
-                    ("VLLM_XC_reason_on", "XC", True),
-                    ("VLLM_XC_reason_off", "XC", False),
-                ]
-            )
+    # Define 3 realistic mode variants: (label, prompt_mode, reasoning_flag)
+    # For DeepSeek and Qwen3 models, explicitly set reasoning flags for all modes
+    model_lower = model.lower()
+    is_deepseek_or_qwen = (
+        (("ds" in model_lower) or ("deepseek" in model_lower)) and 
+        ("v31" in model_lower or "v3.1" in model_lower or "v3" in model_lower)
+    ) or ("qwen3" in model_lower)
+    
+    if is_deepseek_or_qwen:
+        mode_variants: List[Tuple[str, str, Optional[bool]]] = [
+            ("VLLM_NR", "NR", False),          # Plain prompt, reasoning OFF (baseline)
+            ("VLLM_XC", "XC", False),          # CoT prompt, reasoning OFF (prompt reasoning)
+            ("VLLM_NR_REASONING", "NR", True), # Plain prompt, reasoning ON (model reasoning)
+        ]
+    else:
+        mode_variants: List[Tuple[str, str, Optional[bool]]] = [
+            ("VLLM_NR", "NR", None),           # Plain prompt, no toggle (baseline)
+            ("VLLM_XC", "XC", None),           # CoT prompt, no toggle (prompt reasoning)
+            ("VLLM_NR_REASONING", "NR", True), # Plain prompt, toggle ON (model reasoning)
+        ]
 
     def run_variants(q: Question) -> List[Dict[str, Any]]:
         local_records: List[Dict[str, Any]] = []
         for label, prompt_mode, reasoning_flag in mode_variants:
             extra_body = build_extra_body_for_model(model, reasoning_flag)
+            # Debug: print extra_body for first question to verify configuration
+            if q == questions[0]:
+                print(f"  {label}: reasoning_flag={reasoning_flag}, extra_body={extra_body}")
             rec = process_question_single(
                 client,
                 model,
