@@ -1,7 +1,45 @@
 #!/usr/bin/env python3
 """
-Consolidated reasoning evaluation and config generation for MMLU-Pro.
-Evaluates models with/without reasoning and generates optimized router config.
+Statistical Reasoning Mode Evaluation for LLM Router Configuration
+
+A production-grade evaluation framework that determines optimal reasoning mode
+configurations for large language model routers using rigorous statistical
+analysis and evidence-based decision making.
+
+This module implements a multi-criteria statistical framework that evaluates
+the effectiveness of reasoning modes across different task categories, generating
+optimized router configurations based on empirical evidence rather than
+arbitrary thresholds.
+
+Statistical Methodology:
+    - McNemar's test for paired binary outcomes
+    - Fisher's exact test for unpaired comparisons
+    - Cohen's h effect size analysis for practical significance
+    - Bayesian evidence estimation using Beta-Binomial conjugate priors
+    - Multi-pathway significance testing framework
+
+Key Features:
+    - Robust statistical inference for small sample sizes
+    - Evidence-based decision making with transparent reasoning
+    - Comprehensive effect size and practical significance analysis
+    - Bayesian probability estimation for intuitive interpretation
+    - Production-ready configuration generation
+
+Usage:
+    python reasoning_eval_consolidated.py \\
+        --endpoint http://localhost:8000/v1 \\
+        --samples-per-category 25 \\
+        --output-config optimized_config.yaml
+
+    python reasoning_eval_consolidated.py --show-methodology
+
+Outputs:
+    - YAML configuration file with optimized reasoning decisions
+    - CSV file containing detailed evaluation results
+    - JSON file with comprehensive statistical analysis
+
+Copyright (c) 2025 vLLM Project
+Licensed under the Apache License, Version 2.0
 """
 
 import argparse
@@ -20,74 +58,153 @@ from tqdm import tqdm
 from scipy import stats
 import numpy as np
 
+# Regular expression pattern for extracting multiple choice answers from model responses
 ANSWER_PATTERN = re.compile(r"(?:answer(?:\sis)?:?\s*)([A-J])", re.IGNORECASE)
 
+# Statistical significance thresholds
+ALPHA_STRICT = 0.05      # Traditional significance level
+ALPHA_RELAXED = 0.10     # Relaxed significance level for borderline cases
+EFFECT_SIZE_MEDIUM = 0.2 # Cohen's h threshold for medium effect size
+BAYESIAN_THRESHOLD = 0.8 # Bayesian probability threshold for strong evidence
+MIN_IMPROVEMENT = 0.10   # Minimum improvement threshold for Bayesian pathway
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Consolidated reasoning evaluation and config generation")
-    parser.add_argument("--endpoint", type=str, default="http://localhost:8000/v1", help="API endpoint (vLLM or OpenAI)")
-    parser.add_argument("--api-key", type=str, default="", help="API key (auto-detects OPENAI_API_KEY env var)")
-    parser.add_argument("--use-openai", action="store_true", help="Use OpenAI API (sets endpoint to https://api.openai.com/v1)")
-    parser.add_argument("--models", type=str, nargs="*", help="Models to evaluate (auto-discover if empty)")
-    parser.add_argument("--samples-per-category", type=int, default=5, help="Questions per category")
-    parser.add_argument("--concurrent-requests", type=int, default=4, help="Concurrent requests")
-    parser.add_argument("--output-config", type=str, default="config.yaml", help="Output config file")
-    parser.add_argument("--config-template", type=str, default="", help="Path to config template YAML file")
-    parser.add_argument("--significance-level", type=float, default=0.05, help="Statistical significance level (p-value threshold)")
+
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command line arguments for the reasoning evaluation framework.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments
+    """
+    parser = argparse.ArgumentParser(
+        description="Statistical reasoning mode evaluation for LLM router configuration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --endpoint http://localhost:8000/v1 --samples-per-category 25
+  %(prog)s --use-openai --models gpt-4o --samples-per-category 50
+  %(prog)s --show-methodology
+        """
+    )
+    
+    # API Configuration
+    parser.add_argument("--endpoint", type=str, default="http://localhost:8000/v1",
+                       help="API endpoint URL (default: %(default)s)")
+    parser.add_argument("--api-key", type=str, default="",
+                       help="API key (auto-detects OPENAI_API_KEY environment variable)")
+    parser.add_argument("--use-openai", action="store_true",
+                       help="Use OpenAI API (sets endpoint to https://api.openai.com/v1)")
+    
+    # Model Configuration
+    parser.add_argument("--models", type=str, nargs="*",
+                       help="Models to evaluate (auto-discover if not specified)")
+    
+    # Evaluation Parameters
+    parser.add_argument("--samples-per-category", type=int, default=5,
+                       help="Number of questions per category (default: %(default)s)")
+    parser.add_argument("--concurrent-requests", type=int, default=4,
+                       help="Number of concurrent API requests (default: %(default)s)")
+    
+    # Output Configuration
+    parser.add_argument("--output-config", type=str, default="config.yaml",
+                       help="Output configuration file path (default: %(default)s)")
+    parser.add_argument("--config-template", type=str, default="",
+                       help="Path to configuration template YAML file")
+    
+    # Statistical Parameters
+    parser.add_argument("--significance-level", type=float, default=ALPHA_STRICT,
+                       help=f"Statistical significance level (default: {ALPHA_STRICT})")
+    
+    # Documentation
+    parser.add_argument("--show-methodology", action="store_true",
+                       help="Display detailed methodology explanation and exit")
+    
     return parser.parse_args()
 
 
 def get_models(endpoint: str, api_key: str) -> List[str]:
-    """Get available models from endpoint."""
+    """
+    Discover available models from the specified API endpoint.
+    
+    Args:
+        endpoint: API endpoint URL
+        api_key: API authentication key
+        
+    Returns:
+        List of available model identifiers
+        
+    Raises:
+        None: Errors are logged and empty list is returned
+    """
     try:
-        # For OpenAI API, we need a valid API key
+        # Validate OpenAI API requirements
         if "api.openai.com" in endpoint and not api_key:
-            print("OpenAI API requires an API key. Set OPENAI_API_KEY or use --api-key")
+            print("ERROR: OpenAI API requires authentication. Please set OPENAI_API_KEY environment variable or use --api-key")
             return []
         
+        # Initialize API client
         client = OpenAI(base_url=endpoint, api_key=api_key or "dummy")
-        models = client.models.list()
-        model_list = [m.id for m in models.data]
+        models_response = client.models.list()
+        model_list = [model.id for model in models_response.data]
         
-        # Filter OpenAI models to reasoning-capable ones
+        # Apply OpenAI-specific filtering for reasoning-capable models
         if "api.openai.com" in endpoint:
-            reasoning_models = [m for m in model_list if any(x in m.lower() for x in ["gpt-4", "o1"])]
-            if reasoning_models:
-                print(f"Found {len(reasoning_models)} reasoning-capable OpenAI models: {reasoning_models}")
-                return reasoning_models
+            reasoning_capable = ["gpt-4", "o1"]
+            filtered_models = [
+                model for model in model_list 
+                if any(capability in model.lower() for capability in reasoning_capable)
+            ]
+            
+            if filtered_models:
+                print(f"Discovered {len(filtered_models)} reasoning-capable models: {filtered_models}")
+                return filtered_models
             else:
-                print(f"No reasoning-capable models found. Available: {model_list}")
+                print(f"WARNING: No reasoning-capable models found. Available models: {model_list}")
                 return model_list
         
+        print(f"Discovered {len(model_list)} models from endpoint")
         return model_list
+        
     except Exception as e:
-        print(f"Failed to get models: {e}")
+        print(f"ERROR: Failed to discover models from {endpoint}: {e}")
         return []
 
 
 def build_reasoning_params(model: str, reasoning: bool) -> Optional[Dict[str, Any]]:
-    """Build reasoning parameters for model."""
-    lower = model.lower()
+    """
+    Construct model-specific reasoning parameters for API requests.
     
-    # OpenAI models (o1 series has built-in reasoning, GPT-4 uses reasoning parameter)
-    if "o1" in lower:
-        # o1 models always use reasoning, no parameter needed
-        return None
-    elif "gpt-4" in lower or ("gpt" in lower and "api.openai.com" in lower):
-        # OpenAI GPT models use top-level reasoning parameter
-        return {"reasoning": reasoning}
+    Different model families use different parameter structures to enable
+    reasoning mode. This function maps model identifiers to their appropriate
+    reasoning parameter format.
     
-    # vLLM models - all use extra_body with specific structures
-    elif "deepseek" in lower and ("v31" in lower or "v3" in lower):
-        # DeepSeek v3.1 uses chat_template_kwargs.thinking
+    Args:
+        model: Model identifier string
+        reasoning: Whether to enable reasoning mode
+        
+    Returns:
+        Dictionary of reasoning parameters, or None if no parameters needed
+        
+    Note:
+        Parameter structures are based on model family conventions:
+        - DeepSeek models: chat_template_kwargs.thinking
+        - Qwen3 models: chat_template_kwargs.enable_thinking
+        - GPT-OSS models: reasoning_effort parameter
+    """
+    model_lower = model.lower()
+    
+    # vLLM-hosted model families with specific reasoning implementations
+    if "deepseek" in model_lower and ("v31" in model_lower):
+        # DeepSeek v3.1 reasoning via chat template kwargs
         return {"chat_template_kwargs": {"thinking": reasoning}}
-    elif "qwen3" in lower:
-        # Qwen3 uses chat_template_kwargs.enable_thinking
+    elif "qwen3" in model_lower:
+        # Qwen3 reasoning via chat template kwargs
         return {"chat_template_kwargs": {"enable_thinking": reasoning}}
-    elif "gpt-oss" in lower:
-        # GPT-OSS uses reasoning_effort
+    elif "gpt-oss" in model_lower:
+        # GPT-OSS reasoning via effort parameter
         return {"reasoning_effort": "high" if reasoning else "low"}
     
+    # Model does not support reasoning parameters
     return None
 
 
@@ -233,7 +350,76 @@ def evaluate_model(model: str, endpoint: str, api_key: str, df: pd.DataFrame, co
 
 
 def analyze_reasoning_statistical(results_df: pd.DataFrame) -> Dict[str, Dict]:
-    """Analyze reasoning effectiveness by category using statistical significance."""
+    """
+    Analyze reasoning effectiveness using enhanced statistical methodology.
+    
+    This function implements a multi-criteria statistical framework that goes beyond
+    simple p-value thresholds to make evidence-based decisions about reasoning mode
+    effectiveness across different categories.
+    
+    STATISTICAL METHODOLOGY:
+    =======================
+    
+    1. SIGNIFICANCE TESTING:
+       - McNemar's test for paired data (same questions, different modes)
+       - Fisher's exact test for unpaired data as fallback
+       - Appropriate for small sample sizes with exact p-values
+    
+    2. EFFECT SIZE CALCULATION:
+       - Cohen's h for proportion differences
+       - Formula: h = 2 * (arcsin(√p₂) - arcsin(√p₁))
+       - Provides standardized measure of practical significance
+    
+    3. BAYESIAN ANALYSIS:
+       - Beta-binomial conjugate prior model
+       - Uniform priors: Beta(1,1) for both conditions
+       - Monte Carlo estimation of P(reasoning > baseline)
+    
+    4. MULTI-CRITERIA DECISION:
+       Reasoning is enabled if ANY of these criteria are met:
+       a) Traditional significance: p < 0.05
+       b) Borderline significance: p < 0.10 AND |Cohen's h| > 0.2
+       c) Bayesian evidence: P(reasoning > baseline) > 80% AND improvement > 10%
+    
+    Args:
+        results_df (pd.DataFrame): Evaluation results with columns:
+            - category: Question category
+            - mode: 'NR' or 'NR_REASONING'  
+            - is_correct: Boolean correctness
+            - total_tokens: Token usage
+            - success: Whether evaluation succeeded
+    
+    Returns:
+        Dict[str, Dict]: Statistical analysis results for each category containing:
+            - use_reasoning: Boolean decision
+            - reasoning_effort: 'low', 'medium', or 'high'
+            - reason: Detailed explanation of decision
+            - nr_accuracy: Baseline accuracy
+            - nr_reasoning_accuracy: Reasoning mode accuracy
+            - improvement: Absolute improvement
+            - token_overhead: Token usage multiplier
+            - p_value: Statistical significance
+            - cohens_h: Effect size
+            - bayesian_prob: Probability reasoning is better
+            - sample_size: Number of questions evaluated
+            - traditional_significant: p < 0.05
+            - borderline_significant: p < 0.10 AND medium effect
+            - bayesian_significant: Strong Bayesian evidence
+    
+    INTERPRETATION GUIDE:
+    ====================
+    - p_value < 0.05: Strong statistical evidence
+    - 0.05 ≤ p_value < 0.10 with |h| > 0.2: Moderate evidence with meaningful effect
+    - bayesian_prob > 80%: Strong probabilistic evidence
+    - |cohens_h| > 0.2: Practically meaningful difference
+    - improvement > 5%: Substantial practical benefit
+    
+    Example:
+        >>> df = pd.read_csv('evaluation_results.csv')
+        >>> decisions = analyze_reasoning_statistical(df)
+        >>> enabled_categories = [cat for cat, dec in decisions.items() 
+        ...                      if dec['use_reasoning']]
+    """
     decisions = {}
     
     for category in results_df["category"].unique():
@@ -269,61 +455,145 @@ def analyze_reasoning_statistical(results_df: pd.DataFrame) -> Dict[str, Dict]:
         improvement = nr_reasoning_acc - nr_acc
         overhead = nr_reasoning_tokens / nr_tokens if nr_tokens > 0 else float('inf')
         
-        # Perform statistical significance test
-        # Use McNemar's test for paired binary data (same questions, different modes)
-        # If sample sizes are equal, we can pair them; otherwise use Fisher's exact test
+        # STEP 1: STATISTICAL SIGNIFICANCE TESTING
+        # ========================================
+        # We use different tests depending on whether we have paired data
+        # (same questions evaluated in both modes) or unpaired data.
         
         if len(nr_results) == len(nr_reasoning_results):
-            # Paired test - McNemar's test
-            # Create contingency table for paired responses
-            both_correct = np.sum((nr_results == 1) & (nr_reasoning_results == 1))
-            nr_only_correct = np.sum((nr_results == 1) & (nr_reasoning_results == 0))
-            reasoning_only_correct = np.sum((nr_results == 0) & (nr_reasoning_results == 1))
-            both_wrong = np.sum((nr_results == 0) & (nr_reasoning_results == 0))
+            # PAIRED DATA: McNemar's Test
+            # ---------------------------
+            # McNemar's test is appropriate for paired binary data where the same
+            # subjects (questions) are tested under two different conditions (modes).
+            # It focuses on the discordant pairs - cases where the two modes disagree.
             
-            # McNemar's test focuses on discordant pairs
-            if nr_only_correct + reasoning_only_correct > 0:
-                # Use continuity correction for small samples
-                mcnemar_stat = (abs(nr_only_correct - reasoning_only_correct) - 1)**2 / (nr_only_correct + reasoning_only_correct)
+            # Create 2x2 contingency table for paired responses:
+            #                    Reasoning Mode
+            #                 Correct  Incorrect
+            # NR Mode Correct    a        b      <- b = nr_only_correct
+            #      Incorrect     c        d      <- c = reasoning_only_correct
+            
+            both_correct = np.sum((nr_results == 1) & (nr_reasoning_results == 1))  # a
+            nr_only_correct = np.sum((nr_results == 1) & (nr_reasoning_results == 0))  # b
+            reasoning_only_correct = np.sum((nr_results == 0) & (nr_reasoning_results == 1))  # c
+            both_wrong = np.sum((nr_results == 0) & (nr_reasoning_results == 0))  # d
+            
+            # McNemar's test statistic focuses on discordant pairs (b + c)
+            # Under null hypothesis: P(b) = P(c), so (b-c)² / (b+c) ~ χ²(1)
+            discordant_pairs = nr_only_correct + reasoning_only_correct
+            
+            if discordant_pairs > 0:
+                # Apply continuity correction for small samples: |b-c| - 1
+                # This makes the test more conservative for small sample sizes
+                mcnemar_stat = (abs(nr_only_correct - reasoning_only_correct) - 1)**2 / discordant_pairs
                 p_value = 1 - stats.chi2.cdf(mcnemar_stat, 1)
             else:
-                p_value = 1.0  # No discordant pairs
+                # No discordant pairs means identical performance
+                p_value = 1.0
         else:
-            # Unpaired test - Fisher's exact test
-            # Create 2x2 contingency table
+            # UNPAIRED DATA: Fisher's Exact Test
+            # ----------------------------------
+            # When sample sizes differ, we can't pair the data, so we use
+            # Fisher's exact test for 2x2 contingency tables. This test
+            # provides exact p-values regardless of sample size.
+            
             nr_correct = np.sum(nr_results)
             nr_total = len(nr_results)
             reasoning_correct = np.sum(nr_reasoning_results)
             reasoning_total = len(nr_reasoning_results)
             
+            # Create 2x2 contingency table:
+            #              Correct  Incorrect  Total
+            # NR Mode        a        b         n1
+            # Reasoning      c        d         n2
             contingency_table = [
                 [nr_correct, nr_total - nr_correct],
                 [reasoning_correct, reasoning_total - reasoning_correct]
             ]
             
+            # Fisher's exact test computes exact p-value using hypergeometric distribution
             _, p_value = stats.fisher_exact(contingency_table, alternative='two-sided')
         
-        # Determine if statistically significant
-        statistically_significant = p_value < 0.05  # Using standard 0.05 threshold
+        # STEP 2: EFFECT SIZE CALCULATION
+        # ===============================
+        # Cohen's h measures the effect size for differences between proportions.
+        # It's based on the arcsine transformation, which stabilizes variance
+        # and makes the metric more interpretable across different base rates.
         
-        # Use reasoning if statistically significant AND improvement > 0
+        # Formula: h = 2 * (arcsin(√p₂) - arcsin(√p₁))
+        # Interpretation: |h| < 0.2 (small), 0.2-0.5 (medium), >0.5 (large)
+        if nr_acc > 0 and nr_reasoning_acc > 0:
+            cohens_h = 2 * (np.arcsin(np.sqrt(nr_reasoning_acc)) - np.arcsin(np.sqrt(nr_acc)))
+        else:
+            cohens_h = 0
+        
+        # STEP 3: BAYESIAN ANALYSIS
+        # =========================
+        # We use a Beta-Binomial conjugate prior model to estimate the probability
+        # that reasoning mode is actually better than baseline. This provides an
+        # intuitive probabilistic interpretation of the evidence.
+        
+        from scipy.stats import beta
+        
+        # Set up Beta posteriors with uniform priors Beta(1,1)
+        # Posterior: Beta(successes + 1, failures + 1)
+        nr_successes = np.sum(nr_results)
+        nr_failures = len(nr_results) - nr_successes
+        reasoning_successes = np.sum(nr_reasoning_results)
+        reasoning_failures = len(nr_reasoning_results) - reasoning_successes
+        
+        nr_posterior = beta(nr_successes + 1, nr_failures + 1)
+        reasoning_posterior = beta(reasoning_successes + 1, reasoning_failures + 1)
+        
+        # Monte Carlo estimation of P(reasoning_accuracy > baseline_accuracy)
+        # This gives us the probability that reasoning mode is actually better
+        np.random.seed(42)  # For reproducible results
+        n_samples = 10000
+        nr_samples = nr_posterior.rvs(n_samples)
+        reasoning_samples = reasoning_posterior.rvs(n_samples)
+        bayesian_prob = np.mean(reasoning_samples > nr_samples)
+        
+        # STEP 4: MULTI-CRITERIA DECISION FRAMEWORK
+        # =========================================
+        # We use three pathways to significance, allowing for different types
+        # of evidence to support the decision to enable reasoning mode.
+        
+        # Apply multi-criteria decision framework
+        traditional_significant = p_value < ALPHA_STRICT
+        borderline_significant = (p_value < ALPHA_RELAXED) and (abs(cohens_h) > EFFECT_SIZE_MEDIUM)
+        bayesian_significant = (bayesian_prob > BAYESIAN_THRESHOLD) and (improvement > MIN_IMPROVEMENT)
+        
+        # Aggregate significance across all pathways
+        statistically_significant = (traditional_significant or 
+                                   borderline_significant or 
+                                   bayesian_significant)
+        
+        # Final decision requires both significance and positive improvement
         use_reasoning = statistically_significant and improvement > 0
         
-        # Determine effort level based on improvement magnitude
-        if improvement >= 0.15:  # 15%+ improvement
+        # Determine reasoning effort level based on improvement magnitude
+        if improvement >= 0.15:
             effort = "high"
-        elif improvement >= 0.10:  # 10%+ improvement
+        elif improvement >= 0.10:
             effort = "medium"
         else:
             effort = "low"
         
-        # Create reason string
+        # Generate detailed reasoning explanation
+        significance_criteria = []
+        if traditional_significant:
+            significance_criteria.append(f"Traditional significance (p={p_value:.3f})")
+        if borderline_significant:
+            significance_criteria.append(f"Borderline significance with medium effect (p={p_value:.3f}, h={cohens_h:.2f})")
+        if bayesian_significant:
+            significance_criteria.append(f"Strong Bayesian evidence (P={bayesian_prob:.1%}, Δ={improvement:.1%})")
+        
         if not statistically_significant:
-            reason = f"Not statistically significant (p={p_value:.3f})"
+            reason = f"Insufficient evidence: p={p_value:.3f}, h={cohens_h:.2f}, P(better)={bayesian_prob:.1%}"
         elif improvement <= 0:
-            reason = f"Significant but negative improvement ({improvement:.1%}, p={p_value:.3f})"
+            reason = f"Significant but detrimental effect: {improvement:.1%} ({'; '.join(significance_criteria)})"
         else:
-            reason = f"Statistically significant improvement ({improvement:.1%}, p={p_value:.3f})"
+            reason = f"Evidence-based improvement: {improvement:.1%} ({'; '.join(significance_criteria)})"
         
         decisions[category] = {
             "use_reasoning": bool(use_reasoning),
@@ -336,6 +606,11 @@ def analyze_reasoning_statistical(results_df: pd.DataFrame) -> Dict[str, Dict]:
             "p_value": float(p_value),
             "sample_size": len(nr_results),
             "statistically_significant": bool(statistically_significant),
+            "cohens_h": float(cohens_h),
+            "bayesian_prob": float(bayesian_prob),
+            "traditional_significant": bool(traditional_significant),
+            "borderline_significant": bool(borderline_significant),
+            "bayesian_significant": bool(bayesian_significant),
         }
     
     return decisions
@@ -354,35 +629,98 @@ def load_config_template(template_path: str = "") -> Dict:
     except FileNotFoundError:
         print(f"⚠️  Warning: Template file not found at {template_path}")
         print("Using fallback hardcoded template")
-        # Fallback to hardcoded template
+        # Fallback to hardcoded template with complete structure
         return {
             "bert_model": {"model_id": "sentence-transformers/all-MiniLM-L12-v2", "threshold": 0.6, "use_cpu": True},
-            "semantic_cache": {"enabled": True, "similarity_threshold": 0.8, "max_entries": 1000, "ttl_seconds": 3600},
+            "semantic_cache": {"enabled": False, "similarity_threshold": 0.8, "max_entries": 1000, "ttl_seconds": 3600},
             "tools": {"enabled": True, "top_k": 3, "similarity_threshold": 0.2, "tools_db_path": "config/tools_db.json", "fallback_to_empty": True},
-            "prompt_guard": {"enabled": True, "use_modernbert": True, "model_id": "models/jailbreak_classifier_modernbert-base_model", "threshold": 0.7, "use_cpu": True, "jailbreak_mapping_path": "models/jailbreak_classifier_modernbert-base_model/jailbreak_type_mapping.json"},
+            "prompt_guard": {"enabled": False, "use_modernbert": True, "model_id": "models/jailbreak_classifier_modernbert-base_model", "threshold": 0.7, "use_cpu": True, "jailbreak_mapping_path": "models/jailbreak_classifier_modernbert-base_model/jailbreak_type_mapping.json"},
             "classifier": {
                 "category_model": {"model_id": "models/category_classifier_modernbert-base_model", "use_modernbert": True, "threshold": 0.6, "use_cpu": True, "category_mapping_path": "models/category_classifier_modernbert-base_model/category_mapping.json"},
                 "pii_model": {"model_id": "models/pii_classifier_modernbert-base_presidio_token_model", "use_modernbert": True, "threshold": 0.7, "use_cpu": True, "pii_mapping_path": "models/pii_classifier_modernbert-base_presidio_token_model/pii_type_mapping.json"}
             },
+            "vllm_endpoints": [
+                {
+                    "name": "endpoint1",
+                    "address": "127.0.0.1",
+                    "port": 8000,
+                    "models": [""],
+                    "weight": 1,
+                    "health_check_path": "/health"
+                }
+            ],
+            "model_config": {},
             "default_model": "",
             "default_reasoning_effort": "high",
-            "categories": []
+            "categories": [],
+            "reasoning_families": {
+                "deepseek": {"type": "chat_template_kwargs", "parameter": "thinking"},
+                "qwen3": {"type": "chat_template_kwargs", "parameter": "enable_thinking"},
+                "gpt-oss": {"type": "reasoning_effort", "parameter": "reasoning_effort"},
+                "gpt": {"type": "reasoning_effort", "parameter": "reasoning_effort"}
+            }
         }
 
 
 def generate_config(results_df: pd.DataFrame, reasoning_decisions: Dict, model: str, template_path: str = "") -> Dict:
-    """Generate router configuration from template."""
+    """
+    Generate router configuration from template with complete model and endpoint setup.
+    
+    Args:
+        results_df: Evaluation results DataFrame
+        reasoning_decisions: Statistical analysis decisions for each category
+        model: Primary model identifier
+        template_path: Path to configuration template file
+        
+    Returns:
+        Complete router configuration dictionary
+    """
     # Load template
     config = load_config_template(template_path)
     
     # Set model-specific values
     config["default_model"] = model
     
+    # Configure vLLM endpoints
+    if "vllm_endpoints" in config and config["vllm_endpoints"]:
+        # Update the first endpoint with the actual model
+        config["vllm_endpoints"][0]["models"] = [model]
+    
+    # Configure model-specific settings
+    if "model_config" not in config:
+        config["model_config"] = {}
+    
+    # Determine reasoning family based on model name
+    model_lower = model.lower()
+    if "qwen3" in model_lower:
+        reasoning_family = "qwen3"
+    elif "deepseek" in model_lower and ("v31" in model_lower):
+        reasoning_family = "deepseek"
+    elif "gpt-oss" in model_lower:
+        reasoning_family = "gpt-oss"
+    elif "gpt" in model_lower:
+        reasoning_family = "gpt"
+    else:
+        reasoning_family = "gpt"  # Default fallback
+    
+    # Add model configuration
+    config["model_config"][model] = {
+        "reasoning_family": reasoning_family,
+        "preferred_endpoints": ["endpoint1"],
+        "pii_policy": {
+            "allow_by_default": True
+        }
+    }
+    
     # Add categories with reasoning decisions
+    config["categories"] = []
     for category, decision in reasoning_decisions.items():
-        # Get best accuracy for model scoring
+        # Get best accuracy for model scoring (use reasoning accuracy if enabled, otherwise baseline)
         cat_df = results_df[(results_df["category"] == category) & (results_df["success"])]
-        best_acc = float(cat_df["is_correct"].mean()) if not cat_df.empty else 0.0
+        if decision["use_reasoning"]:
+            best_acc = decision["nr_reasoning_accuracy"]
+        else:
+            best_acc = decision["nr_accuracy"]
         
         config["categories"].append({
             "name": category,
@@ -397,6 +735,11 @@ def generate_config(results_df: pd.DataFrame, reasoning_decisions: Dict, model: 
 
 def main():
     args = parse_args()
+    
+    # Handle methodology display request
+    if args.show_methodology:
+        print_methodology_summary()
+        return
     
     # Handle OpenAI API setup
     if args.use_openai:
@@ -477,6 +820,7 @@ def main():
         print(f"  {category}: {status}")
         print(f"    Accuracy: {acc_change} ({decision['improvement']:+.1%})")
         print(f"    Statistical: {p_val} ({'significant' if decision['statistically_significant'] else 'not significant'})")
+        print(f"    Effect size: h={decision['cohens_h']:.2f}, Bayesian prob={decision['bayesian_prob']:.1%}")
         print(f"    Cost: {tokens}")
         print(f"    Reason: {decision['reason']}")
         print()
@@ -501,6 +845,102 @@ def main():
     print(f"\n✅ Config saved to: {args.output_config}")
     print(f"📊 Results saved to: {results_file}")
     print(f"📈 Analysis saved to: {analysis_file}")
+
+
+def print_methodology_summary() -> None:
+    """
+    Display comprehensive documentation of the statistical methodology.
+    
+    Provides detailed technical documentation of the multi-criteria statistical
+    framework used for reasoning mode evaluation, including theoretical
+    foundations, implementation details, and interpretation guidelines.
+    """
+    print("""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              STATISTICAL METHODOLOGY FOR REASONING MODE EVALUATION          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+OBJECTIVE:
+    Determine optimal reasoning mode configurations for LLM router categories
+    using rigorous statistical analysis that balances significance testing
+    with practical utility considerations.
+
+STATISTICAL FRAMEWORK:
+
+    1. HYPOTHESIS TESTING
+       • McNemar's Test: Paired binary outcome analysis for matched questions
+         across reasoning modes. Applies continuity correction for small samples.
+       • Fisher's Exact Test: Unpaired analysis with exact p-values, robust
+         to small sample sizes and unbalanced designs.
+
+    2. EFFECT SIZE QUANTIFICATION
+       • Cohen's h: Standardized effect size for proportion differences
+         Formula: h = 2(arcsin(√p₂) - arcsin(√p₁))
+         Thresholds: |h| < 0.2 (small), 0.2-0.5 (medium), >0.5 (large)
+
+    3. BAYESIAN INFERENCE
+       • Beta-Binomial conjugate prior model with uniform Beta(1,1) priors
+       • Monte Carlo estimation of P(reasoning_accuracy > baseline_accuracy)
+       • Provides probabilistic interpretation robust to small samples
+
+MULTI-CRITERIA DECISION FRAMEWORK:
+
+    Reasoning mode activation requires positive improvement AND any of:
+
+    PATHWAY A - Traditional Significance:
+        p < 0.05 (conventional statistical significance)
+
+    PATHWAY B - Borderline Significance with Effect Size:
+        p < 0.10 AND |Cohen's h| > 0.2
+        (relaxed significance threshold with meaningful effect)
+
+    PATHWAY C - Bayesian Evidence:
+        P(reasoning > baseline) > 80% AND improvement > 10%
+        (strong probabilistic evidence with substantial benefit)
+
+ADVANTAGES OVER THRESHOLD-BASED METHODS:
+
+    Traditional approaches using fixed thresholds (e.g., >2% improvement,
+    <2x token overhead) suffer from:
+    • Arbitrary cutoff selection without statistical justification
+    • Failure to account for sampling uncertainty
+    • Inability to distinguish meaningful from random differences
+    • Binary decisions without consideration of evidence strength
+
+    This framework provides:
+    • Principled statistical inference with appropriate uncertainty quantification
+    • Multiple evidence pathways accommodating different significance patterns
+    • Effect size analysis ensuring practical meaningfulness
+    • Transparent decision rationale with quantified evidence strength
+
+INTERPRETATION GUIDELINES:
+
+    p-value < 0.05:              Strong statistical evidence
+    0.05 ≤ p-value < 0.10:       Moderate statistical evidence
+    P(reasoning > baseline) > 80%: Strong probabilistic evidence
+    |Cohen's h| > 0.2:           Practically meaningful effect size
+    Improvement > 10%:           Substantial practical benefit
+
+IMPLEMENTATION PARAMETERS:
+
+    ALPHA_STRICT = 0.05          Traditional significance threshold
+    ALPHA_RELAXED = 0.10         Borderline significance threshold
+    EFFECT_SIZE_MEDIUM = 0.2     Medium effect size threshold
+    BAYESIAN_THRESHOLD = 0.8     Bayesian evidence threshold
+    MIN_IMPROVEMENT = 0.10       Minimum improvement for Bayesian pathway
+
+REFERENCES:
+
+    McNemar, Q. (1947). Note on the sampling error of the difference between
+    correlated proportions or percentages. Psychometrika, 12(2), 153-157.
+
+    Cohen, J. (1988). Statistical Power Analysis for the Behavioral Sciences.
+    2nd Edition. Lawrence Erlbaum Associates.
+
+    Kruschke, J. K. (2014). Doing Bayesian Data Analysis: A Tutorial with R,
+    JAGS, and Stan. 2nd Edition. Academic Press.
+
+""")
 
 
 if __name__ == "__main__":
