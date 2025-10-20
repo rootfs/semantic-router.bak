@@ -49,6 +49,21 @@ func NewCacheBackend(config CacheConfig) (CacheBackend, error) {
 		}
 		return NewMilvusCache(options)
 
+	case HybridCacheType:
+		observability.Debugf("Creating Hybrid cache backend - MaxMemory: %d, LocalCache: %d, TTL: %ds, Threshold: %.3f",
+			config.MaxMemoryEntries, config.LocalCacheSize, config.TTLSeconds, config.SimilarityThreshold)
+		options := HybridCacheOptions{
+			Enabled:             config.Enabled,
+			SimilarityThreshold: config.SimilarityThreshold,
+			TTLSeconds:          config.TTLSeconds,
+			MaxMemoryEntries:    config.MaxMemoryEntries,
+			HNSWM:               config.HNSWM,
+			HNSWEfConstruction:  config.HNSWEfConstruction,
+			MilvusConfigPath:    config.BackendConfigPath,
+			LocalCacheSize:      config.LocalCacheSize,
+		}
+		return NewHybridCache(options)
+
 	default:
 		observability.Debugf("Unsupported cache backend type: %s", config.BackendType)
 		return nil, fmt.Errorf("unsupported cache backend type: %s", config.BackendType)

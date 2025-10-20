@@ -40,7 +40,7 @@ func generateQuery(length ContentLength, index int) string {
 		"function", "layer", "convolutional", "recurrent", "transformer", "attention",
 		"embedding", "vector", "semantic", "similarity", "clustering", "feature",
 	}
-	
+
 	query := fmt.Sprintf("Query %d: ", index)
 	for i := 0; i < int(length); i++ {
 		query += words[i%len(words)] + " "
@@ -122,10 +122,12 @@ func BenchmarkComprehensive(b *testing.B) {
 				// Write to CSV
 				if csvFile != nil {
 					nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-					
+
 					line := fmt.Sprintf("%s,%s,%d,linear,0,0,%.0f,0,0,%d,1.0\n",
 						hardware, contentLen.String(), cacheSize, nsPerOp, b.N)
-					csvFile.WriteString(line)
+					if _, err := csvFile.WriteString(line); err != nil {
+						b.Logf("Warning: failed to write to CSV: %v", err)
+					}
 				}
 			})
 
@@ -160,11 +162,13 @@ func BenchmarkComprehensive(b *testing.B) {
 					// Write to CSV
 					if csvFile != nil {
 						nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-						
+
 						line := fmt.Sprintf("%s,%s,%d,hnsw_%s,%d,%d,%.0f,0,0,%d,0.0\n",
-							hardware, contentLen.String(), cacheSize, hnswCfg.name, 
+							hardware, contentLen.String(), cacheSize, hnswCfg.name,
 							hnswCfg.m, hnswCfg.ef, nsPerOp, b.N)
-						csvFile.WriteString(line)
+						if _, err := csvFile.WriteString(line); err != nil {
+							b.Logf("Warning: failed to write to CSV: %v", err)
+						}
 					}
 				})
 			}

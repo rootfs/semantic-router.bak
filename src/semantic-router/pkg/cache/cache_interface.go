@@ -58,6 +58,9 @@ const (
 
 	// MilvusCacheType specifies the Milvus vector database backend
 	MilvusCacheType CacheBackendType = "milvus"
+
+	// HybridCacheType specifies the hybrid HNSW + Milvus backend
+	HybridCacheType CacheBackendType = "hybrid"
 )
 
 // EvictionPolicyType defines the available eviction policies
@@ -105,4 +108,8 @@ type CacheConfig struct {
 
 	// HNSWEfConstruction is the size of dynamic candidate list during construction (default: 200)
 	HNSWEfConstruction int `yaml:"hnsw_ef_construction,omitempty"`
+
+	// Hybrid cache specific settings
+	MaxMemoryEntries int `yaml:"max_memory_entries,omitempty"` // Max entries in HNSW for hybrid cache
+	LocalCacheSize   int `yaml:"local_cache_size,omitempty"`   // Local document cache size for hybrid cache
 }

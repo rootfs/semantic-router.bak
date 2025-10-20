@@ -603,7 +603,7 @@ func (c *InMemoryCache) rebuildHNSWIndex() {
 
 	// Rebuild by adding all entries
 	for i, entry := range c.entries {
-		if entry.Embedding != nil && len(entry.Embedding) > 0 {
+		if len(entry.Embedding) > 0 {
 			c.hnswIndex.addNode(i, entry.Embedding, c.entries)
 		}
 	}
@@ -612,16 +612,16 @@ func (c *InMemoryCache) rebuildHNSWIndex() {
 }
 
 // newHNSWIndex creates a new HNSW index
-func newHNSWIndex(M, efConstruction int) *HNSWIndex {
+func newHNSWIndex(m, efConstruction int) *HNSWIndex {
 	return &HNSWIndex{
 		nodes:          []*HNSWNode{},
 		entryPoint:     -1,
 		maxLayer:       -1,
 		efConstruction: efConstruction,
-		M:              M,
-		Mmax:           M,
-		Mmax0:          M * 2,
-		ml:             1.0 / math.Log(float64(M)),
+		M:              m,
+		Mmax:           m,
+		Mmax0:          m * 2,
+		ml:             1.0 / math.Log(float64(m)),
 	}
 }
 
@@ -783,12 +783,12 @@ func (h *HNSWIndex) searchLayer(queryEmbedding []float32, entryPoint, ef, layer 
 }
 
 // selectNeighbors selects the best neighbors using a simple heuristic
-func (h *HNSWIndex) selectNeighbors(candidates []int, M int, entries []CacheEntry) []int {
-	if len(candidates) <= M {
+func (h *HNSWIndex) selectNeighbors(candidates []int, m int, entries []CacheEntry) []int {
+	if len(candidates) <= m {
 		return candidates
 	}
-	// Just return first M for simplicity
-	return candidates[:M]
+	// Just return first m for simplicity
+	return candidates[:m]
 }
 
 // distance calculates cosine similarity (as dot product since embeddings are normalized)
