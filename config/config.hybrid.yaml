@@ -11,7 +11,6 @@ semantic_cache:
   
   # Hybrid cache specific settings
   max_memory_entries: 100000 # Max entries in HNSW index (100K)
-  local_cache_size: 1000 # Local document cache for hot data
   
   # HNSW parameters
   hnsw_m: 16 # Number of bi-directional links

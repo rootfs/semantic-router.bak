@@ -111,5 +111,4 @@ type CacheConfig struct {
 
 	// Hybrid cache specific settings
 	MaxMemoryEntries int `yaml:"max_memory_entries,omitempty"` // Max entries in HNSW for hybrid cache
-	LocalCacheSize   int `yaml:"local_cache_size,omitempty"`   // Local document cache size for hybrid cache
 }

@@ -72,7 +72,6 @@ milvus:
 		HNSWM:               16,
 		HNSWEfConstruction:  200,
 		MilvusConfigPath:    milvusConfig,
-		LocalCacheSize:      10,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create hybrid cache: %v", err)
@@ -231,7 +230,6 @@ milvus:
 		TTLSeconds:          300,
 		MaxMemoryEntries:    5, // Only 5 entries in memory
 		MilvusConfigPath:    milvusConfig,
-		LocalCacheSize:      2,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create hybrid cache: %v", err)
@@ -301,7 +299,6 @@ milvus:
 		TTLSeconds:          300,
 		MaxMemoryEntries:    100,
 		MilvusConfigPath:    milvusConfig,
-		LocalCacheSize:      10,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create hybrid cache: %v", err)
@@ -421,7 +418,6 @@ milvus:
 		TTLSeconds:          300,
 		MaxMemoryEntries:    1000,
 		MilvusConfigPath:    milvusConfig,
-		LocalCacheSize:      100,
 	})
 	if err != nil {
 		b.Fatalf("Failed to create hybrid cache: %v", err)

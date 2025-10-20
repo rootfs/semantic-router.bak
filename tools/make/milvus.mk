@@ -86,3 +86,63 @@ stop-milvus-ui:
 	@$(CONTAINER_RUNTIME) stop milvus-ui || true
 	@$(CONTAINER_RUNTIME) rm milvus-ui || true
 	@echo "Attu container stopped and removed"
+
+# Hybrid vs Milvus Benchmarks
+benchmark-hybrid-vs-milvus: rust start-milvus ## Run comprehensive Hybrid Cache vs Milvus benchmarks
+	@$(LOG_TARGET)
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "  Hybrid Cache vs Milvus Benchmark Suite"
+	@echo "  Validating claims from hybrid HNSW storage paper"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "GPU Usage:"
+	@echo "  • To use GPU: USE_CPU=false make benchmark-hybrid-vs-milvus"
+	@echo "  • Select GPUs: CUDA_VISIBLE_DEVICES=2,3 USE_CPU=false make benchmark-hybrid-vs-milvus"
+	@echo "  • Default: Uses GPU if available (USE_CPU=false)"
+	@echo ""
+	@bash scripts/run_hybrid_vs_milvus_benchmarks.sh
+	@echo ""
+	@echo "Benchmarks complete! Results in: benchmark_results/hybrid_vs_milvus/"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  make analyze-hybrid-benchmarks    # Analyze results"
+	@echo "  make plot-hybrid-benchmarks       # Generate plots"
+	@echo "  make stop-milvus                  # Clean up"
+
+analyze-hybrid-benchmarks: ## Analyze Hybrid vs Milvus benchmark results
+	@$(LOG_TARGET)
+	@python3 scripts/analyze_hybrid_benchmarks.py
+
+plot-hybrid-benchmarks: ## Generate plots from Hybrid vs Milvus benchmarks
+	@$(LOG_TARGET)
+	@python3 scripts/plot_hybrid_comparison.py
+
+benchmark-hybrid-quick: rust ## Run quick Hybrid vs Milvus benchmark (smaller scale)
+	@$(LOG_TARGET)
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "  Quick Hybrid vs Milvus Benchmark (1K, 10K entries)"
+	@echo "  Estimated time: 10-15 minutes"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "Cleaning and restarting Milvus..."
+	@$(CONTAINER_RUNTIME) stop milvus-semantic-cache 2>/dev/null || true
+	@$(CONTAINER_RUNTIME) rm milvus-semantic-cache 2>/dev/null || true
+	@sudo rm -rf /tmp/milvus-data 2>/dev/null || true
+	@$(MAKE) start-milvus
+	@sleep 5
+	@echo ""
+	@echo "GPU Usage:"
+	@echo "  • To use GPU: USE_CPU=false make benchmark-hybrid-quick"
+	@echo "  • Select GPUs: CUDA_VISIBLE_DEVICES=2,3 USE_CPU=false make benchmark-hybrid-quick"
+	@echo ""
+	@mkdir -p benchmark_results/hybrid_vs_milvus
+	@export LD_LIBRARY_PATH=$${PWD}/candle-binding/target/release && \
+		export USE_CPU=$${USE_CPU:-false} && \
+		echo "Using GPU mode: USE_CPU=$$USE_CPU" && \
+		cd src/semantic-router/pkg/cache && \
+		CGO_ENABLED=1 go test -v -timeout 30m -tags=milvus \
+		-run='^$$' -bench='^BenchmarkHybridVsMilvus/CacheSize_(1000|10000)$$' \
+		-benchtime=50x -benchmem .
+	@echo ""
+	@echo "Quick benchmark complete!"
+	@echo "Results in: benchmark_results/hybrid_vs_milvus/"

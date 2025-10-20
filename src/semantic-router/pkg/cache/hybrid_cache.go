@@ -16,14 +16,17 @@ import (
 )
 
 // HybridCache combines in-memory HNSW index with external Milvus storage
-// This provides fast O(log n) search while supporting millions of entries
+// Architecture:
+//   - In-memory: HNSW index with ALL embeddings (for fast O(log n) search)
+//   - Milvus: ALL documents (fetched by ID after search)
+// This provides fast search while supporting millions of entries without storing docs in memory
 type HybridCache struct {
-	// In-memory components (hot path)
+	// In-memory components (search only)
 	hnswIndex  *HNSWIndex
 	embeddings [][]float32
 	idMap      map[int]string // Entry index → Milvus ID
 
-	// External storage (cold path)
+	// External storage (all documents)
 	milvusCache *MilvusCache
 
 	// Configuration
@@ -39,19 +42,6 @@ type HybridCache struct {
 
 	// Concurrency control
 	mu sync.RWMutex
-
-	// Local document cache (optional optimization)
-	localCache      map[string]*cachedDocument
-	localCacheSize  int
-	lastCleanupTime *time.Time
-}
-
-// cachedDocument represents a document cached locally for hot access
-type cachedDocument struct {
-	requestBody  []byte
-	responseBody []byte
-	lastAccess   time.Time
-	hitCount     int64
 }
 
 // HybridCacheOptions contains configuration for the hybrid cache
@@ -68,9 +58,6 @@ type HybridCacheOptions struct {
 
 	// Milvus settings
 	MilvusConfigPath string
-
-	// Optimization settings
-	LocalCacheSize int // Local document cache size (default: 1000)
 }
 
 // NewHybridCache creates a new hybrid cache instance
@@ -108,9 +95,6 @@ func NewHybridCache(options HybridCacheOptions) (*HybridCache, error) {
 	if options.HNSWEfConstruction <= 0 {
 		options.HNSWEfConstruction = 200
 	}
-	if options.LocalCacheSize <= 0 {
-		options.LocalCacheSize = 1000
-	}
 
 	// Initialize HNSW index
 	hnswIndex := newHNSWIndex(options.HNSWM, options.HNSWEfConstruction)
@@ -124,12 +108,10 @@ func NewHybridCache(options HybridCacheOptions) (*HybridCache, error) {
 		maxMemoryEntries:    options.MaxMemoryEntries,
 		ttlSeconds:          options.TTLSeconds,
 		enabled:             true,
-		localCache:          make(map[string]*cachedDocument),
-		localCacheSize:      options.LocalCacheSize,
 	}
 
-	observability.Infof("Hybrid cache initialized: HNSW(M=%d, ef=%d), maxMemory=%d, localCache=%d",
-		options.HNSWM, options.HNSWEfConstruction, options.MaxMemoryEntries, options.LocalCacheSize)
+	observability.Infof("Hybrid cache initialized: HNSW(M=%d, ef=%d), maxMemory=%d",
+		options.HNSWM, options.HNSWEfConstruction, options.MaxMemoryEntries)
 
 	return cache, nil
 }
@@ -242,17 +224,13 @@ func (h *HybridCache) AddEntry(requestID string, model string, query string, req
 	h.idMap[entryIndex] = requestID
 	h.addNodeHybrid(entryIndex, embedding)
 
-	// Add to local cache for hot access
-	h.addToLocalCacheUnsafe(requestID, requestBody, responseBody)
-
 	observability.Debugf("HybridCache.AddEntry: added to HNSW index=%d, milvusID=%s",
 		entryIndex, requestID)
 	observability.LogEvent("hybrid_cache_entry_added", map[string]interface{}{
-		"backend":  "hybrid",
-		"query":    query,
-		"model":    model,
-		"in_hnsw":  true,
-		"in_local": true,
+		"backend": "hybrid",
+		"query":   query,
+		"model":   model,
+		"in_hnsw": true,
 	})
 
 	metrics.RecordCacheOperation("hybrid", "add_entry", "success", time.Since(start).Seconds())
@@ -283,117 +261,78 @@ func (h *HybridCache) FindSimilar(model string, query string) ([]byte, bool, err
 		return nil, false, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 
-	// Phase 1: Search HNSW index for candidates
+	// Phase 1: Search HNSW index for candidates (with similarity scores!)
 	h.mu.RLock()
-	candidateIndices := h.searchKNNHybrid(queryEmbedding, 10, 50)
-
-	// Map indices to Milvus IDs
-	milvusIDs := make([]string, 0, len(candidateIndices))
-	for _, idx := range candidateIndices {
-		if idx >= 0 && idx < len(h.embeddings) {
-			if milvusID, ok := h.idMap[idx]; ok {
-				milvusIDs = append(milvusIDs, milvusID)
-			}
+	candidates := h.searchKNNHybrid(queryEmbedding, 10, 50)
+	
+	// Filter by similarity threshold BEFORE fetching from Milvus
+	var qualifiedCandidates []searchResult
+	for _, candidate := range candidates {
+		if candidate.similarity >= h.similarityThreshold {
+			qualifiedCandidates = append(qualifiedCandidates, candidate)
+		}
+	}
+	
+	// Map qualified candidates to Milvus IDs
+	type candidateWithID struct {
+		milvusID   string
+		similarity float32
+		index      int
+	}
+	
+	candidatesWithIDs := make([]candidateWithID, 0, len(qualifiedCandidates))
+	for _, candidate := range qualifiedCandidates {
+		if milvusID, ok := h.idMap[candidate.index]; ok {
+			candidatesWithIDs = append(candidatesWithIDs, candidateWithID{
+				milvusID:   milvusID,
+				similarity: candidate.similarity,
+				index:      candidate.index,
+			})
 		}
 	}
 	h.mu.RUnlock()
 
-	if len(milvusIDs) == 0 {
+	if len(candidatesWithIDs) == 0 {
 		atomic.AddInt64(&h.missCount, 1)
-		observability.Debugf("HybridCache.FindSimilar: no candidates found in HNSW")
+		if len(candidates) > 0 {
+			observability.Debugf("HybridCache.FindSimilar: %d candidates found but none above threshold %.3f",
+				len(candidates), h.similarityThreshold)
+		} else {
+			observability.Debugf("HybridCache.FindSimilar: no candidates found in HNSW")
+		}
 		metrics.RecordCacheOperation("hybrid", "find_similar", "miss", time.Since(start).Seconds())
 		metrics.RecordCacheMiss()
 		return nil, false, nil
 	}
 
-	observability.Debugf("HybridCache.FindSimilar: HNSW returned %d candidates", len(milvusIDs))
+	observability.Debugf("HybridCache.FindSimilar: HNSW returned %d candidates, %d above threshold",
+		len(candidates), len(candidatesWithIDs))
 
-	// Phase 2: Try local cache first (hot path optimization)
-	for i, milvusID := range milvusIDs {
-		if i >= len(candidateIndices) {
-			break
-		}
-
-		// Check local cache
-		h.mu.RLock()
-		if doc, ok := h.localCache[milvusID]; ok {
-			// Calculate similarity
-			idx := candidateIndices[i]
-			if idx >= 0 && idx < len(h.embeddings) {
-				similarity := dotProduct(queryEmbedding, h.embeddings[idx])
-				h.mu.RUnlock()
-
-				if similarity >= h.similarityThreshold {
-					// Update access stats
-					h.mu.Lock()
-					doc.lastAccess = time.Now()
-					doc.hitCount++
-					h.mu.Unlock()
-
-					atomic.AddInt64(&h.hitCount, 1)
-					observability.Debugf("HybridCache.FindSimilar: LOCAL CACHE HIT - similarity=%.4f",
-						similarity)
-					metrics.RecordCacheOperation("hybrid", "find_similar", "hit_local", time.Since(start).Seconds())
-					metrics.RecordCacheHit()
-					return doc.responseBody, true, nil
-				}
-			} else {
-				h.mu.RUnlock()
-			}
-		} else {
-			h.mu.RUnlock()
-		}
-	}
-
-	// Phase 3: Fetch from Milvus (cold path)
-	observability.Debugf("HybridCache.FindSimilar: fetching from Milvus, ids=%v", milvusIDs)
-
-	// Try to get documents from Milvus by checking each ID
+	// Phase 2: Fetch from Milvus (only for candidates above threshold!)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// For now, we'll try the first candidate with highest similarity
-	for i, milvusID := range milvusIDs {
-		if i >= len(candidateIndices) {
-			break
-		}
-
-		idx := candidateIndices[i]
-		if idx < 0 || idx >= len(h.embeddings) {
-			continue
-		}
-
-		// Calculate similarity
-		h.mu.RLock()
-		embedding := h.embeddings[idx]
-		h.mu.RUnlock()
-
-		similarity := dotProduct(queryEmbedding, embedding)
-		if similarity < h.similarityThreshold {
-			continue
-		}
-
-		// Use Milvus to find by ID (we'll use FindSimilar as a workaround)
-		// In a real implementation, we'd add a GetByID method to MilvusCache
-		// For now, we'll just use FindSimilar which will work but is less efficient
-		responseBody, found, err := h.milvusCache.FindSimilar(model, query)
+	// Try candidates in order (already sorted by similarity from HNSW)
+	for _, candidate := range candidatesWithIDs {
+		// Fetch document from Milvus by ID (optimized - no redundant search!)
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 2*time.Second)
+		responseBody, err := h.milvusCache.GetByID(fetchCtx, candidate.milvusID)
+		fetchCancel()
+		
 		if err != nil {
-			observability.Debugf("HybridCache.FindSimilar: Milvus fetch failed: %v", err)
+			observability.Debugf("HybridCache.FindSimilar: Milvus GetByID failed for %s: %v", 
+				candidate.milvusID, err)
 			continue
 		}
 
-		if found {
-			// Add to local cache for future hits
-			h.mu.Lock()
-			h.addToLocalCacheUnsafe(milvusID, nil, responseBody)
-			h.mu.Unlock()
-
+		if responseBody != nil {
 			atomic.AddInt64(&h.hitCount, 1)
-			observability.Debugf("HybridCache.FindSimilar: MILVUS HIT - similarity=%.4f", similarity)
+			observability.Debugf("HybridCache.FindSimilar: MILVUS HIT - similarity=%.4f (threshold=%.3f)",
+				candidate.similarity, h.similarityThreshold)
 			observability.LogEvent("hybrid_cache_hit", map[string]interface{}{
 				"backend":     "hybrid",
 				"source":      "milvus",
-				"similarity":  similarity,
+				"similarity":  candidate.similarity,
 				"threshold":   h.similarityThreshold,
 				"model":       model,
 				"latency_ms":  time.Since(start).Milliseconds(),
@@ -411,7 +350,7 @@ func (h *HybridCache) FindSimilar(model string, query string) ([]byte, bool, err
 		"backend":        "hybrid",
 		"threshold":      h.similarityThreshold,
 		"model":          model,
-		"candidates":     len(milvusIDs),
+		"candidates":     len(candidatesWithIDs),
 	})
 	metrics.RecordCacheOperation("hybrid", "find_similar", "miss", time.Since(start).Seconds())
 	metrics.RecordCacheMiss()
@@ -441,7 +380,6 @@ func (h *HybridCache) Close() error {
 	// Clear in-memory structures
 	h.embeddings = nil
 	h.idMap = nil
-	h.localCache = nil
 	h.hnswIndex = nil
 
 	metrics.UpdateCacheEntries("hybrid", 0)
@@ -463,18 +401,12 @@ func (h *HybridCache) GetStats() CacheStats {
 		hitRatio = float64(hits) / float64(total)
 	}
 
-	stats := CacheStats{
+	return CacheStats{
 		TotalEntries: len(h.embeddings),
 		HitCount:     hits,
 		MissCount:    misses,
 		HitRatio:     hitRatio,
 	}
-
-	if h.lastCleanupTime != nil {
-		stats.LastCleanupTime = h.lastCleanupTime
-	}
-
-	return stats
 }
 
 // Helper methods
@@ -491,11 +423,11 @@ func (h *HybridCache) evictOneUnsafe() {
 	// Could use LRU/LFU here by tracking access times/counts
 	// For now, just evict the first entry
 
+	// Get milvusID before removing from map (for logging)
 	milvusID := h.idMap[victimIdx]
 
 	// Remove from structures
 	delete(h.idMap, victimIdx)
-	delete(h.localCache, milvusID)
 
 	// Note: We don't remove from Milvus (data persists there)
 	// We also don't rebuild HNSW (mark as stale)
@@ -511,39 +443,10 @@ func (h *HybridCache) evictOneUnsafe() {
 	})
 }
 
-// addToLocalCacheUnsafe adds a document to local cache (must hold write lock)
-func (h *HybridCache) addToLocalCacheUnsafe(milvusID string, requestBody, responseBody []byte) {
-	if h.localCacheSize <= 0 {
-		return
-	}
-
-	// Evict if necessary
-	if len(h.localCache) >= h.localCacheSize {
-		// Simple FIFO: remove oldest
-		var oldestID string
-		var oldestTime time.Time
-		first := true
-
-		for id, doc := range h.localCache {
-			if first || doc.lastAccess.Before(oldestTime) {
-				oldestID = id
-				oldestTime = doc.lastAccess
-				first = false
-			}
-		}
-
-		if oldestID != "" {
-			delete(h.localCache, oldestID)
-		}
-	}
-
-	// Add to cache
-	h.localCache[milvusID] = &cachedDocument{
-		requestBody:  requestBody,
-		responseBody: responseBody,
-		lastAccess:   time.Now(),
-		hitCount:     0,
-	}
+// searchResult holds a candidate with its similarity score
+type searchResult struct {
+	index      int
+	similarity float32
 }
 
 // dotProduct calculates dot product between two vectors
@@ -764,27 +667,40 @@ func (h *HybridCache) selectNeighborsHybrid(candidates []int, m int) []int {
 }
 
 // searchKNNHybrid searches for k nearest neighbors (hybrid version)
-func (h *HybridCache) searchKNNHybrid(query []float32, k int, ef int) []int {
+func (h *HybridCache) searchKNNHybrid(query []float32, k int, ef int) []searchResult {
 	// Lock is already held by caller (mu.RLock())
 
 	if h.hnswIndex.entryPoint == -1 || len(h.embeddings) == 0 {
 		return nil
 	}
 
-	// Search from top layer
+	// Search from top layer (just get indices for navigation)
 	currNearest := []int{h.hnswIndex.entryPoint}
 	
 	for lc := h.hnswIndex.maxLayer; lc > 0; lc-- {
 		currNearest = h.searchLayerHybrid(query, 1, lc, currNearest)
 	}
 
-	// Search at layer 0 with ef
-	candidates := h.searchLayerHybrid(query, ef, 0, currNearest)
+	// Search at layer 0 with ef - this returns candidates with distances
+	candidateIndices := h.searchLayerHybrid(query, ef, 0, currNearest)
 
-	// Return top k
-	if len(candidates) > k {
-		return candidates[:k]
+	// Convert to searchResults with similarity scores
+	results := make([]searchResult, 0, len(candidateIndices))
+	for _, idx := range candidateIndices {
+		if idx >= 0 && idx < len(h.embeddings) {
+			similarity := dotProduct(query, h.embeddings[idx])
+			results = append(results, searchResult{
+				index:      idx,
+				similarity: similarity,
+			})
+		}
 	}
-	return candidates
+
+	// Results are already sorted by similarity (from searchLayer)
+	// Return top k
+	if len(results) > k {
+		return results[:k]
+	}
+	return results
 }
 

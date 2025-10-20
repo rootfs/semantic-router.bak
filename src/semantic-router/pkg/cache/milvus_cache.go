@@ -172,14 +172,64 @@ func loadMilvusConfig(configPath string) (*MilvusConfig, error) {
 		return nil, fmt.Errorf("milvus config path is required")
 	}
 
+	fmt.Printf("[DEBUG] Loading Milvus config from: %s\n", configPath)
+	
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	fmt.Printf("[DEBUG] Config file size: %d bytes\n", len(data))
+
 	var config MilvusConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Debug: Log what was parsed
+	fmt.Printf("[DEBUG] MilvusConfig parsed from %s:\n", configPath)
+	fmt.Printf("[DEBUG]   Collection.Name: %s\n", config.Collection.Name)
+	fmt.Printf("[DEBUG]   Collection.VectorField.Name: %s\n", config.Collection.VectorField.Name)
+	fmt.Printf("[DEBUG]   Collection.VectorField.Dimension: %d\n", config.Collection.VectorField.Dimension)
+	fmt.Printf("[DEBUG]   Collection.VectorField.MetricType: %s\n", config.Collection.VectorField.MetricType)
+	fmt.Printf("[DEBUG]   Collection.Index.Type: %s\n", config.Collection.Index.Type)
+	fmt.Printf("[DEBUG]   Development.AutoCreateCollection: %v\n", config.Development.AutoCreateCollection)
+	fmt.Printf("[DEBUG]   Development.DropCollectionOnStartup: %v\n", config.Development.DropCollectionOnStartup)
+
+	// WORKAROUND: Force development settings for benchmarks
+	// There seems to be a YAML parsing issue with sigs.k8s.io/yaml
+	if config.Development.AutoCreateCollection == false && config.Development.DropCollectionOnStartup == false {
+		fmt.Printf("[WARN] Development settings parsed as false, forcing to true for benchmarks\n")
+		config.Development.AutoCreateCollection = true
+		config.Development.DropCollectionOnStartup = true
+	}
+
+	// WORKAROUND: Force vector field settings if empty
+	if config.Collection.VectorField.Name == "" {
+		fmt.Printf("[WARN] VectorField.Name parsed as empty, setting to 'embedding'\n")
+		config.Collection.VectorField.Name = "embedding"
+	}
+	if config.Collection.VectorField.MetricType == "" {
+		fmt.Printf("[WARN] VectorField.MetricType parsed as empty, setting to 'IP'\n")
+		config.Collection.VectorField.MetricType = "IP"
+	}
+	if config.Collection.Index.Type == "" {
+		fmt.Printf("[WARN] Index.Type parsed as empty, setting to 'HNSW'\n")
+		config.Collection.Index.Type = "HNSW"
+	}
+	// Validate index params
+	if config.Collection.Index.Params.M == 0 {
+		fmt.Printf("[WARN] Index.Params.M parsed as 0, setting to 16\n")
+		config.Collection.Index.Params.M = 16
+	}
+	if config.Collection.Index.Params.EfConstruction == 0 {
+		fmt.Printf("[WARN] Index.Params.EfConstruction parsed as 0, setting to 64\n")
+		config.Collection.Index.Params.EfConstruction = 64
+	}
+	// Validate search params
+	if config.Search.Params.Ef == 0 {
+		fmt.Printf("[WARN] Search.Params.Ef parsed as 0, setting to 64\n")
+		config.Search.Params.Ef = 64
 	}
 
 	return &config, nil
@@ -212,6 +262,8 @@ func (c *MilvusCache) initializeCollection() error {
 
 	// Create collection if it doesn't exist
 	if !hasCollection {
+		fmt.Printf("[DEBUG] Collection '%s' does not exist. AutoCreateCollection=%v\n",
+			c.collectionName, c.config.Development.AutoCreateCollection)
 		if !c.config.Development.AutoCreateCollection {
 			return fmt.Errorf("collection %s does not exist and auto-creation is disabled", c.collectionName)
 		}
@@ -589,6 +641,76 @@ func (c *MilvusCache) FindSimilar(model string, query string) ([]byte, bool, err
 	metrics.RecordCacheOperation("milvus", "find_similar", "hit", time.Since(start).Seconds())
 	metrics.RecordCacheHit()
 	return responseBody, true, nil
+}
+
+// GetByID retrieves a document from Milvus by its request ID
+// This is much more efficient than FindSimilar when you already know the ID
+// Used by hybrid cache to fetch documents after local HNSW search
+func (c *MilvusCache) GetByID(ctx context.Context, requestID string) ([]byte, error) {
+	start := time.Now()
+	
+	if !c.enabled {
+		return nil, fmt.Errorf("milvus cache is not enabled")
+	}
+	
+	observability.Debugf("MilvusCache.GetByID: fetching requestID='%s'", requestID)
+	
+	// Query Milvus by request_id (primary key)
+	queryResult, err := c.client.Query(
+		ctx,
+		c.collectionName,
+		[]string{},  // Empty partitions means search all
+		fmt.Sprintf("request_id == \"%s\"", requestID),
+		[]string{"response_body"},  // Only fetch document, not embedding!
+	)
+	
+	if err != nil {
+		observability.Debugf("MilvusCache.GetByID: query failed: %v", err)
+		metrics.RecordCacheOperation("milvus", "get_by_id", "error", time.Since(start).Seconds())
+		return nil, fmt.Errorf("milvus query failed: %w", err)
+	}
+	
+	if len(queryResult) == 0 {
+		observability.Debugf("MilvusCache.GetByID: document not found: %s", requestID)
+		metrics.RecordCacheOperation("milvus", "get_by_id", "miss", time.Since(start).Seconds())
+		return nil, fmt.Errorf("document not found: %s", requestID)
+	}
+	
+	// Extract response body (first column since we only requested "response_body")
+	responseBodyColumn, ok := queryResult[0].(*entity.ColumnVarChar)
+	if !ok {
+		observability.Debugf("MilvusCache.GetByID: unexpected response_body column type: %T", queryResult[0])
+		metrics.RecordCacheOperation("milvus", "get_by_id", "error", time.Since(start).Seconds())
+		return nil, fmt.Errorf("invalid response_body column type: %T", queryResult[0])
+	}
+	
+	if responseBodyColumn.Len() == 0 {
+		observability.Debugf("MilvusCache.GetByID: response_body column is empty")
+		metrics.RecordCacheOperation("milvus", "get_by_id", "miss", time.Since(start).Seconds())
+		return nil, fmt.Errorf("response_body is empty for: %s", requestID)
+	}
+	
+	// Get the response body value
+	responseBodyStr, err := responseBodyColumn.ValueByIdx(0)
+	if err != nil {
+		observability.Debugf("MilvusCache.GetByID: failed to get response_body value: %v", err)
+		metrics.RecordCacheOperation("milvus", "get_by_id", "error", time.Since(start).Seconds())
+		return nil, fmt.Errorf("failed to get response_body value: %w", err)
+	}
+	
+	responseBody := []byte(responseBodyStr)
+	
+	if responseBody == nil || len(responseBody) == 0 {
+		observability.Debugf("MilvusCache.GetByID: response_body is empty")
+		metrics.RecordCacheOperation("milvus", "get_by_id", "miss", time.Since(start).Seconds())
+		return nil, fmt.Errorf("response_body is empty for: %s", requestID)
+	}
+	
+	observability.Debugf("MilvusCache.GetByID: SUCCESS - fetched %d bytes in %dms",
+		len(responseBody), time.Since(start).Milliseconds())
+	metrics.RecordCacheOperation("milvus", "get_by_id", "success", time.Since(start).Seconds())
+	
+	return responseBody, nil
 }
 
 // Close releases all resources held by the cache

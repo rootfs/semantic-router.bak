@@ -48,6 +48,7 @@ type InMemoryCache struct {
 	evictionPolicy      EvictionPolicy
 	hnswIndex           *HNSWIndex
 	useHNSW             bool
+	hnswEfSearch        int // Search-time ef parameter
 }
 
 // InMemoryCacheOptions contains configuration parameters for the in-memory cache
@@ -60,6 +61,7 @@ type InMemoryCacheOptions struct {
 	UseHNSW             bool // Enable HNSW index for faster search
 	HNSWM               int  // Number of bi-directional links (default: 16)
 	HNSWEfConstruction  int  // Size of dynamic candidate list during construction (default: 200)
+	HNSWEfSearch        int  // Size of dynamic candidate list during search (default: 50)
 }
 
 // NewInMemoryCache initializes a new in-memory semantic cache instance
@@ -77,6 +79,12 @@ func NewInMemoryCache(options InMemoryCacheOptions) *InMemoryCache {
 		evictionPolicy = &FIFOPolicy{}
 	}
 
+	// Set HNSW search ef parameter
+	efSearch := options.HNSWEfSearch
+	if efSearch <= 0 {
+		efSearch = 50 // Default value
+	}
+
 	cache := &InMemoryCache{
 		entries:             []CacheEntry{},
 		similarityThreshold: options.SimilarityThreshold,
@@ -85,6 +93,7 @@ func NewInMemoryCache(options InMemoryCacheOptions) *InMemoryCache {
 		enabled:             options.Enabled,
 		evictionPolicy:      evictionPolicy,
 		useHNSW:             options.UseHNSW,
+		hnswEfSearch:        efSearch,
 	}
 
 	// Initialize HNSW index if enabled
@@ -299,8 +308,8 @@ func (c *InMemoryCache) FindSimilar(model string, query string) ([]byte, bool, e
 
 	// Use HNSW index for fast search if enabled
 	if c.useHNSW && c.hnswIndex != nil && len(c.hnswIndex.nodes) > 0 {
-		// Search using HNSW index with ef=50 for good recall
-		candidateIndices := c.hnswIndex.searchKNN(queryEmbedding, 10, 50, c.entries)
+		// Search using HNSW index with configured ef parameter
+		candidateIndices := c.hnswIndex.searchKNN(queryEmbedding, 10, c.hnswEfSearch, c.entries)
 
 		// Filter candidates by model and expiration, then find best match
 		for _, entryIndex := range candidateIndices {
