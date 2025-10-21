@@ -20,11 +20,9 @@ import (
 type USearchHNSWIndex struct {
 	index          *usearch.Index
 	mu             sync.RWMutex
-	nextKey        uint64
-	keyToIndex     map[usearch.Key]int // Maps USearch key to entry index
-	indexToKey     map[int]usearch.Key // Maps entry index to USearch key
 	dimensions     uint
 	efConstruction int
+	efSearch       int
 	M              int
 }
 
@@ -103,8 +101,8 @@ func NewInMemoryCache(options InMemoryCacheOptions) *InMemoryCache {
 		}
 
 		// Note: dimensions will be set on first add
-		cache.hnswIndex = newUSearchHNSWIndex(0, M, efConstruction)
-		observability.Debugf("USearch HNSW index initialized: M=%d, efConstruction=%d", M, efConstruction)
+		cache.hnswIndex = newUSearchHNSWIndex(0, M, efConstruction, efSearch)
+		observability.Debugf("USearch HNSW index initialized: M=%d, efConstruction=%d, efSearch=%d", M, efConstruction, efSearch)
 	}
 
 	return cache
@@ -647,19 +645,17 @@ func (c *InMemoryCache) evictOne() {
 // ===== USearch HNSW Index Implementation =====
 
 // newUSearchHNSWIndex creates a new USearch-based HNSW index
-func newUSearchHNSWIndex(dimensions uint, m, efConstruction int) *USearchHNSWIndex {
+func newUSearchHNSWIndex(dimensions uint, m, efConstruction, efSearch int) *USearchHNSWIndex {
 	return &USearchHNSWIndex{
-		keyToIndex:     make(map[usearch.Key]int),
-		indexToKey:     make(map[int]usearch.Key),
 		dimensions:     dimensions,
 		efConstruction: efConstruction,
+		efSearch:       efSearch,
 		M:              m,
-		nextKey:        0,
 	}
 }
 
 // initializeIndex creates the USearch index with the correct dimensions
-func (h *USearchHNSWIndex) initializeIndex(dimensions uint) error {
+func (h *USearchHNSWIndex) initializeIndex(dimensions uint, initialCapacity uint) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -681,23 +677,34 @@ func (h *USearchHNSWIndex) initializeIndex(dimensions uint) error {
 		return fmt.Errorf("failed to create USearch index: %w", err)
 	}
 
+	// Reserve capacity to avoid resizing
+	if initialCapacity > 0 {
+		if err := index.Reserve(initialCapacity); err != nil {
+			observability.Debugf("Warning: failed to reserve capacity: %v", err)
+		}
+	}
+
 	// Configure threading
 	numCPU := uint(runtime.NumCPU())
 	_ = index.ChangeThreadsAdd(numCPU)
 	_ = index.ChangeThreadsSearch(numCPU)
+	
+	// Set search expansion parameter
+	_ = index.ChangeExpansionSearch(uint(h.efSearch))
 
 	h.index = index
-	observability.Debugf("USearch index initialized: dimensions=%d, M=%d, efConstruction=%d, metric=IP",
-		dimensions, h.M, h.efConstruction)
+	observability.Debugf("USearch index initialized: dimensions=%d, M=%d, efConstruction=%d, efSearch=%d, capacity=%d, metric=IP",
+		dimensions, h.M, h.efConstruction, h.efSearch, initialCapacity)
 
 	return nil
 }
 
 // addVector adds a vector to the USearch index
 func (h *USearchHNSWIndex) addVector(entryIndex int, vector []float32) error {
-	// Initialize index on first add
+	// Initialize index on first add with reasonable capacity
 	if h.index == nil {
-		if err := h.initializeIndex(uint(len(vector))); err != nil {
+		initialCapacity := uint(10000) // Pre-allocate for 10k vectors
+		if err := h.initializeIndex(uint(len(vector)), initialCapacity); err != nil {
 			return err
 		}
 	}
@@ -705,17 +712,13 @@ func (h *USearchHNSWIndex) addVector(entryIndex int, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Generate a unique key for this entry
-	key := usearch.Key(atomic.AddUint64(&h.nextKey, 1))
+	// Use entry index directly as USearch key to avoid map lookups
+	key := usearch.Key(entryIndex)
 
 	// Add to USearch index
 	if err := h.index.Add(key, vector); err != nil {
 		return fmt.Errorf("failed to add vector to USearch: %w", err)
 	}
-
-	// Update mappings
-	h.keyToIndex[key] = entryIndex
-	h.indexToKey[entryIndex] = key
 
 	return nil
 }
@@ -735,18 +738,13 @@ func (h *USearchHNSWIndex) search(query []float32, k int) ([]int, []float32, err
 		return nil, nil, fmt.Errorf("USearch search failed: %w", err)
 	}
 
-	// Convert keys to entry indices
-	indices := make([]int, 0, len(keys))
-	validDistances := make([]float32, 0, len(keys))
-	
+	// Convert keys directly to entry indices (no map lookup needed)
+	indices := make([]int, len(keys))
 	for i, key := range keys {
-		if entryIdx, exists := h.keyToIndex[key]; exists {
-			indices = append(indices, entryIdx)
-			validDistances = append(validDistances, distances[i])
-		}
+		indices[i] = int(key)
 	}
 
-	return indices, validDistances, nil
+	return indices, distances, nil
 }
 
 // size returns the number of vectors in the index
@@ -771,9 +769,6 @@ func (h *USearchHNSWIndex) markForRebuild() {
 		h.index.Destroy()
 		h.index = nil
 	}
-	h.keyToIndex = make(map[usearch.Key]int)
-	h.indexToKey = make(map[int]usearch.Key)
-	h.nextKey = 0
 }
 
 // destroy releases USearch resources
@@ -785,8 +780,6 @@ func (h *USearchHNSWIndex) destroy() {
 		h.index.Destroy()
 		h.index = nil
 	}
-	h.keyToIndex = nil
-	h.indexToKey = nil
 }
 
 // rebuildUSearchIndex rebuilds the USearch index from scratch
@@ -800,6 +793,21 @@ func (c *InMemoryCache) rebuildUSearchIndex() {
 
 	// Clear the existing index
 	c.hnswIndex.markForRebuild()
+
+	// Count valid entries for capacity hint
+	validCount := 0
+	for _, entry := range c.entries {
+		if len(entry.Embedding) > 0 {
+			validCount++
+		}
+	}
+
+	// Pre-initialize with correct capacity if we have entries
+	if validCount > 0 && len(c.entries) > 0 && len(c.entries[0].Embedding) > 0 {
+		if err := c.hnswIndex.initializeIndex(uint(len(c.entries[0].Embedding)), uint(validCount)); err != nil {
+			observability.Debugf("Warning: failed to initialize USearch index during rebuild: %v", err)
+		}
+	}
 
 	// Rebuild by adding all entries
 	for i, entry := range c.entries {
