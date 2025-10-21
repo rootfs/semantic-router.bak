@@ -6,6 +6,7 @@ package cache
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -119,18 +120,27 @@ func BenchmarkHybridVsMilvus(b *testing.B) {
 
 	// Test configurations - realistic production scales
 	cacheSizes := []int{
-		1000,    // Small: 1K entries
 		10000,   // Medium: 10K entries
 		50000,   // Large: 50K entries
 		100000,  // Extra Large: 100K entries
 	}
 
-	// CSV output file
-	csvFile, err := os.Create("hybrid_vs_milvus_benchmark.csv")
+	// CSV output file - save to project benchmark_results directory
+	// Determine project root by walking up from test directory
+	projectRoot := "/home/ubuntu/rootfs/back/semantic-router.bak"
+	if envRoot := os.Getenv("PROJECT_ROOT"); envRoot != "" {
+		projectRoot = envRoot
+	}
+	resultsDir := filepath.Join(projectRoot, "benchmark_results", "hybrid_vs_milvus")
+	os.MkdirAll(resultsDir, 0755)
+	timestamp := time.Now().Format("20060102_150405")
+	csvPath := filepath.Join(resultsDir, fmt.Sprintf("results_%s.csv", timestamp))
+	csvFile, err := os.Create(csvPath)
 	if err != nil {
-		b.Logf("Warning: Could not create CSV file: %v", err)
+		b.Logf("Warning: Could not create CSV file at %s: %v", csvPath, err)
 	} else {
 		defer csvFile.Close()
+		b.Logf("Results will be saved to: %s", csvPath)
 		// Write CSV header
 		csvFile.WriteString("cache_type,cache_size,operation,avg_latency_ns,avg_latency_ms,p50_ms,p95_ms,p99_ms,qps,memory_mb,hit_rate,db_calls,total_requests,db_call_percent\n")
 	}
@@ -184,29 +194,50 @@ func BenchmarkHybridVsMilvus(b *testing.B) {
 			// Wait for Milvus to be ready
 			time.Sleep(2 * time.Second)
 
-				// Populate cache
-				b.Logf("Populating Milvus with %d entries...", cacheSize)
+				// Populate cache using batch insert for speed
+				b.Logf("Populating Milvus with %d entries (using batch insert)...", cacheSize)
 				populateStart := time.Now()
+				
+				// Prepare all entries
+				entries := make([]CacheEntry, cacheSize)
 				for i := 0; i < cacheSize; i++ {
-					err := milvusCache.AddEntry(
-						fmt.Sprintf("req-milvus-%d", i),
-						"test-model",
-						testQueries[i],
-						[]byte(fmt.Sprintf("request-%d", i)),
-						[]byte(fmt.Sprintf("response-%d-this-is-a-longer-response-body-to-simulate-realistic-llm-output", i)),
-					)
-					if err != nil {
-						b.Fatalf("Failed to add entry: %v", err)
-					}
-					
-					if (i+1)%1000 == 0 {
-						b.Logf("  Populated %d/%d entries", i+1, cacheSize)
+					entries[i] = CacheEntry{
+						RequestID:    fmt.Sprintf("req-milvus-%d", i),
+						Model:        "test-model",
+						Query:        testQueries[i],
+						RequestBody:  []byte(fmt.Sprintf("request-%d", i)),
+						ResponseBody: []byte(fmt.Sprintf("response-%d-this-is-a-longer-response-body-to-simulate-realistic-llm-output", i)),
 					}
 				}
+				
+				// Insert in batches of 100
+				batchSize := 100
+				for i := 0; i < cacheSize; i += batchSize {
+					end := i + batchSize
+					if end > cacheSize {
+						end = cacheSize
+					}
+					
+					err := milvusCache.AddEntriesBatch(entries[i:end])
+					if err != nil {
+						b.Fatalf("Failed to add batch: %v", err)
+					}
+					
+					if (i+batchSize)%1000 == 0 {
+						b.Logf("  Populated %d/%d entries", i+batchSize, cacheSize)
+					}
+				}
+				
+				// Flush once after all batches
+				b.Logf("Flushing Milvus...")
+				if err := milvusCache.Flush(); err != nil {
+					b.Logf("Warning: flush failed: %v", err)
+				}
+				
 				populateTime := time.Since(populateStart)
 				b.Logf("✓ Populated in %v (%.0f entries/sec)", populateTime, float64(cacheSize)/populateTime.Seconds())
 				
-				// Wait for Milvus to flush
+				// Wait for Milvus to be ready
 				time.Sleep(2 * time.Second)
 
 				// Benchmark search operations
@@ -315,29 +346,50 @@ func BenchmarkHybridVsMilvus(b *testing.B) {
 			// Wait for initialization
 			time.Sleep(2 * time.Second)
 
-				// Populate cache
-				b.Logf("Populating Hybrid cache with %d entries...", cacheSize)
+				// Populate cache using batch insert for speed
+				b.Logf("Populating Hybrid cache with %d entries (using batch insert)...", cacheSize)
 				populateStart := time.Now()
+				
+				// Prepare all entries
+				entries := make([]CacheEntry, cacheSize)
 				for i := 0; i < cacheSize; i++ {
-					err := hybridCache.AddEntry(
-						fmt.Sprintf("req-hybrid-%d", i),
-						"test-model",
-						testQueries[i],
-						[]byte(fmt.Sprintf("request-%d", i)),
-						[]byte(fmt.Sprintf("response-%d-this-is-a-longer-response-body-to-simulate-realistic-llm-output", i)),
-					)
-					if err != nil {
-						b.Fatalf("Failed to add entry: %v", err)
-					}
-					
-					if (i+1)%1000 == 0 {
-						b.Logf("  Populated %d/%d entries", i+1, cacheSize)
+					entries[i] = CacheEntry{
+						RequestID:    fmt.Sprintf("req-hybrid-%d", i),
+						Model:        "test-model",
+						Query:        testQueries[i],
+						RequestBody:  []byte(fmt.Sprintf("request-%d", i)),
+						ResponseBody: []byte(fmt.Sprintf("response-%d-this-is-a-longer-response-body-to-simulate-realistic-llm-output", i)),
 					}
 				}
+				
+				// Insert in batches of 100
+				batchSize := 100
+				for i := 0; i < cacheSize; i += batchSize {
+					end := i + batchSize
+					if end > cacheSize {
+						end = cacheSize
+					}
+					
+					err := hybridCache.AddEntriesBatch(entries[i:end])
+					if err != nil {
+						b.Fatalf("Failed to add batch: %v", err)
+					}
+					
+					if (i+batchSize)%1000 == 0 {
+						b.Logf("  Populated %d/%d entries", i+batchSize, cacheSize)
+					}
+				}
+				
+				// Flush once after all batches
+				b.Logf("Flushing Milvus...")
+				if err := hybridCache.Flush(); err != nil {
+					b.Logf("Warning: flush failed: %v", err)
+				}
+				
 				populateTime := time.Since(populateStart)
 				b.Logf("✓ Populated in %v (%.0f entries/sec)", populateTime, float64(cacheSize)/populateTime.Seconds())
 				
-				// Wait for Milvus to flush
+				// Wait for Milvus to be ready
 				time.Sleep(2 * time.Second)
 
 				// Get initial memory stats

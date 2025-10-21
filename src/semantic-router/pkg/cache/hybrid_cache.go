@@ -239,6 +239,78 @@ func (h *HybridCache) AddEntry(requestID string, model string, query string, req
 	return nil
 }
 
+// AddEntriesBatch stores multiple request-response pairs efficiently
+func (h *HybridCache) AddEntriesBatch(entries []CacheEntry) error {
+	start := time.Now()
+
+	if !h.enabled {
+		return nil
+	}
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	observability.Debugf("HybridCache.AddEntriesBatch: adding %d entries in batch", len(entries))
+
+	// Generate all embeddings first
+	embeddings := make([][]float32, len(entries))
+	for i, entry := range entries {
+		embedding, err := candle_binding.GetEmbedding(entry.Query, 0)
+		if err != nil {
+			metrics.RecordCacheOperation("hybrid", "add_entries_batch", "error", time.Since(start).Seconds())
+			return fmt.Errorf("failed to generate embedding for entry %d: %w", i, err)
+		}
+		embeddings[i] = embedding
+	}
+
+	// Store all in Milvus at once (write-through)
+	if err := h.milvusCache.AddEntriesBatch(entries); err != nil {
+		metrics.RecordCacheOperation("hybrid", "add_entries_batch", "error", time.Since(start).Seconds())
+		return fmt.Errorf("milvus batch add failed: %w", err)
+	}
+
+	// Add all to in-memory HNSW index
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for i, entry := range entries {
+		// Check if we need to evict
+		if len(h.embeddings) >= h.maxMemoryEntries {
+			h.evictOneUnsafe()
+		}
+
+		// Add to HNSW
+		entryIndex := len(h.embeddings)
+		h.embeddings = append(h.embeddings, embeddings[i])
+		h.idMap[entryIndex] = entry.RequestID
+		h.addNodeHybrid(entryIndex, embeddings[i])
+	}
+
+	elapsed := time.Since(start)
+	observability.Debugf("HybridCache.AddEntriesBatch: added %d entries in %v (%.0f entries/sec)",
+		len(entries), elapsed, float64(len(entries))/elapsed.Seconds())
+	observability.LogEvent("hybrid_cache_entries_added", map[string]interface{}{
+		"backend": "hybrid",
+		"count":   len(entries),
+		"in_hnsw": true,
+	})
+
+	metrics.RecordCacheOperation("hybrid", "add_entries_batch", "success", elapsed.Seconds())
+	metrics.UpdateCacheEntries("hybrid", len(h.embeddings))
+
+	return nil
+}
+
+// Flush forces Milvus to persist all buffered data to disk
+func (h *HybridCache) Flush() error {
+	if !h.enabled {
+		return nil
+	}
+	
+	return h.milvusCache.Flush()
+}
+
 // FindSimilar searches for semantically similar cached requests
 func (h *HybridCache) FindSimilar(model string, query string) ([]byte, bool, error) {
 	start := time.Now()

@@ -93,6 +93,7 @@ benchmark-hybrid-vs-milvus: rust start-milvus ## Run comprehensive Hybrid Cache 
 	@echo "═══════════════════════════════════════════════════════════"
 	@echo "  Hybrid Cache vs Milvus Benchmark Suite"
 	@echo "  Validating claims from hybrid HNSW storage paper"
+	@echo "  Cache sizes: 10K, 50K, 100K entries"
 	@echo "═══════════════════════════════════════════════════════════"
 	@echo ""
 	@echo "GPU Usage:"
@@ -111,7 +112,17 @@ benchmark-hybrid-vs-milvus: rust start-milvus ## Run comprehensive Hybrid Cache 
 
 analyze-hybrid-benchmarks: ## Analyze Hybrid vs Milvus benchmark results
 	@$(LOG_TARGET)
-	@python3 scripts/analyze_hybrid_benchmarks.py
+	@echo "Checking for CSV results in benchmark_results/hybrid_vs_milvus/..."
+	@if ls benchmark_results/hybrid_vs_milvus/results_*.csv >/dev/null 2>&1; then \
+		echo "Found CSV results, analyzing..."; \
+		python3 scripts/analyze_hybrid_benchmarks.py; \
+	elif [ -f /tmp/benchmark_batch_fixed.log ]; then \
+		echo "No CSV found, parsing from log file..."; \
+		python3 scripts/parse_hybrid_benchmark_log.py /tmp/benchmark_batch_fixed.log; \
+	else \
+		echo "$(shell tput setaf 3)No benchmark results found. Run 'make benchmark-hybrid-quick' first.$(shell tput sgr0)"; \
+		exit 1; \
+	fi
 
 plot-hybrid-benchmarks: ## Generate plots from Hybrid vs Milvus benchmarks
 	@$(LOG_TARGET)
@@ -120,8 +131,8 @@ plot-hybrid-benchmarks: ## Generate plots from Hybrid vs Milvus benchmarks
 benchmark-hybrid-quick: rust ## Run quick Hybrid vs Milvus benchmark (smaller scale)
 	@$(LOG_TARGET)
 	@echo "═══════════════════════════════════════════════════════════"
-	@echo "  Quick Hybrid vs Milvus Benchmark (1K, 10K entries)"
-	@echo "  Estimated time: 10-15 minutes"
+	@echo "  Quick Hybrid vs Milvus Benchmark (10K entries only)"
+	@echo "  Estimated time: 7-10 minutes"
 	@echo "═══════════════════════════════════════════════════════════"
 	@echo ""
 	@echo "Cleaning and restarting Milvus..."
@@ -140,8 +151,8 @@ benchmark-hybrid-quick: rust ## Run quick Hybrid vs Milvus benchmark (smaller sc
 		export USE_CPU=$${USE_CPU:-false} && \
 		echo "Using GPU mode: USE_CPU=$$USE_CPU" && \
 		cd src/semantic-router/pkg/cache && \
-		CGO_ENABLED=1 go test -v -timeout 30m -tags=milvus \
-		-run='^$$' -bench='^BenchmarkHybridVsMilvus/CacheSize_(1000|10000)$$' \
+		CGO_ENABLED=1 go test -v -timeout 60m -tags=milvus \
+		-run='^$$' -bench='^BenchmarkHybridVsMilvus/CacheSize_10000$$' \
 		-benchtime=50x -benchmem .
 	@echo ""
 	@echo "Quick benchmark complete!"

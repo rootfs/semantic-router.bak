@@ -476,6 +476,102 @@ func (c *MilvusCache) AddEntry(requestID string, model string, query string, req
 	return err
 }
 
+// AddEntriesBatch stores multiple request-response pairs in the cache efficiently
+func (c *MilvusCache) AddEntriesBatch(entries []CacheEntry) error {
+	start := time.Now()
+
+	if !c.enabled {
+		return nil
+	}
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	observability.Debugf("MilvusCache.AddEntriesBatch: adding %d entries in batch", len(entries))
+
+	// Prepare slices for all entries
+	ids := make([]string, len(entries))
+	requestIDs := make([]string, len(entries))
+	models := make([]string, len(entries))
+	queries := make([]string, len(entries))
+	requestBodies := make([]string, len(entries))
+	responseBodies := make([]string, len(entries))
+	embeddings := make([][]float32, len(entries))
+	timestamps := make([]int64, len(entries))
+
+	// Generate embeddings and prepare data for all entries
+	for i, entry := range entries {
+		// Generate semantic embedding for the query
+		embedding, err := candle_binding.GetEmbedding(entry.Query, 0)
+		if err != nil {
+			return fmt.Errorf("failed to generate embedding for entry %d: %w", i, err)
+		}
+
+		// Generate unique ID
+		id := fmt.Sprintf("%x", md5.Sum(fmt.Appendf(nil, "%s_%s_%d", entry.Model, entry.Query, time.Now().UnixNano())))
+
+		ids[i] = id
+		requestIDs[i] = entry.RequestID
+		models[i] = entry.Model
+		queries[i] = entry.Query
+		requestBodies[i] = string(entry.RequestBody)
+		responseBodies[i] = string(entry.ResponseBody)
+		embeddings[i] = embedding
+		timestamps[i] = time.Now().Unix()
+	}
+
+	ctx := context.Background()
+
+	// Get embedding dimension from first entry
+	embeddingDim := len(embeddings[0])
+
+	// Create columns
+	idColumn := entity.NewColumnVarChar("id", ids)
+	requestIDColumn := entity.NewColumnVarChar("request_id", requestIDs)
+	modelColumn := entity.NewColumnVarChar("model", models)
+	queryColumn := entity.NewColumnVarChar("query", queries)
+	requestColumn := entity.NewColumnVarChar("request_body", requestBodies)
+	responseColumn := entity.NewColumnVarChar("response_body", responseBodies)
+	embeddingColumn := entity.NewColumnFloatVector(c.config.Collection.VectorField.Name, embeddingDim, embeddings)
+	timestampColumn := entity.NewColumnInt64("timestamp", timestamps)
+
+	// Upsert all entries at once
+	observability.Debugf("MilvusCache.AddEntriesBatch: upserting %d entries into collection '%s'",
+		len(entries), c.collectionName)
+	_, err := c.client.Upsert(ctx, c.collectionName, "", idColumn, requestIDColumn, modelColumn, queryColumn, requestColumn, responseColumn, embeddingColumn, timestampColumn)
+	if err != nil {
+		observability.Debugf("MilvusCache.AddEntriesBatch: upsert failed: %v", err)
+		metrics.RecordCacheOperation("milvus", "add_entries_batch", "error", time.Since(start).Seconds())
+		return fmt.Errorf("failed to upsert cache entries: %w", err)
+	}
+
+	// Note: Flush removed from batch operation for performance
+	// Call Flush() explicitly after all batches if immediate persistence is required
+
+	elapsed := time.Since(start)
+	observability.Debugf("MilvusCache.AddEntriesBatch: successfully added %d entries in %v (%.0f entries/sec)",
+		len(entries), elapsed, float64(len(entries))/elapsed.Seconds())
+	metrics.RecordCacheOperation("milvus", "add_entries_batch", "success", elapsed.Seconds())
+	
+	return nil
+}
+
+// Flush forces Milvus to persist all buffered data to disk
+func (c *MilvusCache) Flush() error {
+	if !c.enabled {
+		return nil
+	}
+	
+	ctx := context.Background()
+	if err := c.client.Flush(ctx, c.collectionName, false); err != nil {
+		return fmt.Errorf("failed to flush: %w", err)
+	}
+	
+	observability.Debugf("MilvusCache: flushed collection '%s'", c.collectionName)
+	return nil
+}
+
 // addEntry handles the internal logic for storing entries in Milvus
 func (c *MilvusCache) addEntry(id string, requestID string, model string, query string, requestBody, responseBody []byte) error {
 	// Generate semantic embedding for the query
