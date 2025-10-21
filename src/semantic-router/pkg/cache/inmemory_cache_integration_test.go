@@ -229,8 +229,9 @@ func TestInMemoryCacheHNSW(t *testing.T) {
 		if cacheHNSW.hnswIndex == nil {
 			t.Fatal("HNSW index is nil")
 		}
-		if len(cacheHNSW.hnswIndex.nodes) != len(testQueries) {
-			t.Errorf("Expected %d HNSW nodes, got %d", len(testQueries), len(cacheHNSW.hnswIndex.nodes))
+		indexSize := cacheHNSW.hnswIndex.size()
+		if indexSize != len(testQueries) {
+			t.Errorf("Expected %d HNSW vectors, got %d", len(testQueries), indexSize)
 		}
 
 		// Test exact match search
@@ -282,9 +283,9 @@ func TestInMemoryCacheHNSW(t *testing.T) {
 			t.Fatalf("Failed to add entry: %v", err)
 		}
 
-		initialNodes := len(cacheTTL.hnswIndex.nodes)
-		if initialNodes != 1 {
-			t.Errorf("Expected 1 HNSW node initially, got %d", initialNodes)
+		initialSize := cacheTTL.hnswIndex.size()
+		if initialSize != 1 {
+			t.Errorf("Expected 1 HNSW vector initially, got %d", initialSize)
 		}
 
 		// Manually trigger cleanup (in real scenario, TTL would expire)
@@ -292,8 +293,8 @@ func TestInMemoryCacheHNSW(t *testing.T) {
 		cacheTTL.cleanupExpiredEntries()
 		cacheTTL.mu.Unlock()
 
-		t.Logf("After cleanup: %d entries, %d HNSW nodes",
-			len(cacheTTL.entries), len(cacheTTL.hnswIndex.nodes))
+		t.Logf("After cleanup: %d entries, %d HNSW vectors",
+			len(cacheTTL.entries), cacheTTL.hnswIndex.size())
 	})
 }
 
@@ -552,7 +553,7 @@ func BenchmarkHNSWRebuild(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				cache.mu.Lock()
-				cache.rebuildHNSWIndex()
+				cache.rebuildUSearchIndex()
 				cache.mu.Unlock()
 			}
 		})

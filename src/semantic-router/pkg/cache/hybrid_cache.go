@@ -658,12 +658,6 @@ func (h *HybridCache) selectLevelHybrid() int {
 	return level
 }
 
-// randFloat returns a random float between 0 and 1
-func randFloat() float64 {
-	// Simple random using time-based seed
-	return float64(time.Now().UnixNano()%1000) / 1000.0
-}
-
 // searchLayerHybrid searches for nearest neighbors at a specific layer (hybrid version)
 func (h *HybridCache) searchLayerHybrid(query []float32, ef int, layer int, entryPoints []int) []int {
 	visited := make(map[int]bool)

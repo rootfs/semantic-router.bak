@@ -673,7 +673,7 @@ func (h *USearchHNSWIndex) initializeIndex(dimensions uint) error {
 	conf := usearch.DefaultConfig(dimensions)
 	conf.Connectivity = uint(h.M)
 	conf.ExpansionAdd = uint(h.efConstruction)
-	conf.Metric = usearch.InnerProduct // Inner Product (cosine similarity for normalized vectors)
+	conf.Metric = usearch.MetricIP // Inner Product (cosine similarity for normalized vectors)
 
 	// Create index
 	index, err := usearch.NewIndex(conf)
@@ -730,7 +730,7 @@ func (h *USearchHNSWIndex) search(query []float32, k int) ([]int, []float32, err
 	}
 
 	// Perform search
-	keys, distances, err := h.index.Search(query, uint(k))
+	keys, distances, err := h.index.Search(query, k)
 	if err != nil {
 		return nil, nil, fmt.Errorf("USearch search failed: %w", err)
 	}
@@ -758,8 +758,7 @@ func (h *USearchHNSWIndex) size() int {
 		return 0
 	}
 
-	len, _ := h.index.Len()
-	return int(len)
+	return int(h.index.Size())
 }
 
 // markForRebuild marks the index as needing a rebuild

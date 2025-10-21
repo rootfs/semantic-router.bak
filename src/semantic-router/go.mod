@@ -22,6 +22,7 @@ require (
 	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.11.1
+	github.com/unum-cloud/usearch/golang v0.0.0-20251010193336-541e882da5a9
 	github.com/vllm-project/semantic-router/candle-binding v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.38.0
