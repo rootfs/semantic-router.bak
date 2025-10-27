@@ -81,38 +81,33 @@ impl LoRAAdapter {
         device: &Device,
     ) -> Result<Self> {
         // Create LoRA A matrix (rank x input_dim)
+        // IMPORTANT: Try to load from VarBuilder FIRST, fall back to initialization only if not found
         let lora_a = {
-            let weight = match config.init_method {
-                LoRAInitMethod::Kaiming => {
-                    // Kaiming initialization
-                    vb.get_with_hints(
-                        (config.rank, input_dim),
-                        "lora_A.weight",
-                        candle_nn::init::DEFAULT_KAIMING_NORMAL,
-                    )?
-                }
-                LoRAInitMethod::Xavier => {
-                    // Xavier initialization
-                    let fan_in = input_dim as f64;
-                    let fan_out = config.rank as f64;
-                    let std = (2.0 / (fan_in + fan_out)).sqrt();
-                    let weight_data =
-                        Tensor::randn(0.0f32, std as f32, (config.rank, input_dim), device)?;
-                    vb.get((config.rank, input_dim), "lora_A.weight")
-                        .unwrap_or(weight_data)
-                }
-                LoRAInitMethod::Normal { mean, std } => {
-                    let weight_data =
-                        Tensor::randn(mean as f32, std as f32, (config.rank, input_dim), device)?;
-                    vb.get((config.rank, input_dim), "lora_A.weight")
-                        .unwrap_or(weight_data)
-                }
-                LoRAInitMethod::Zero => {
-                    let weight_data = Tensor::zeros((config.rank, input_dim), DType::F32, device)?;
-                    vb.get((config.rank, input_dim), "lora_A.weight")
-                        .unwrap_or(weight_data)
-                }
-            };
+            let weight = vb.get((config.rank, input_dim), "lora_A.weight")
+                .or_else(|_| {
+                    // Fallback to initialization only if weight not found
+                    match config.init_method {
+                        LoRAInitMethod::Kaiming => {
+                            vb.get_with_hints(
+                                (config.rank, input_dim),
+                                "lora_A.weight",
+                                candle_nn::init::DEFAULT_KAIMING_NORMAL,
+                            )
+                        }
+                        LoRAInitMethod::Xavier => {
+                            let fan_in = input_dim as f64;
+                            let fan_out = config.rank as f64;
+                            let std = (2.0 / (fan_in + fan_out)).sqrt();
+                            Tensor::randn(0.0f32, std as f32, (config.rank, input_dim), device)
+                        }
+                        LoRAInitMethod::Normal { mean, std } => {
+                            Tensor::randn(mean as f32, std as f32, (config.rank, input_dim), device)
+                        }
+                        LoRAInitMethod::Zero => {
+                            Tensor::zeros((config.rank, input_dim), DType::F32, device)
+                        }
+                    }
+                })?;
 
             let bias = if config.use_bias {
                 Some(vb.get(config.rank, "lora_A.bias")?)
@@ -123,12 +118,10 @@ impl LoRAAdapter {
             Linear::new(weight, bias)
         };
 
-        // Create LoRA B matrix (output_dim x rank) - initialized to zero
+        // Create LoRA B matrix (output_dim x rank) - Try to load FIRST, then fall back to zero
         let lora_b = {
-            let weight = Tensor::zeros((output_dim, config.rank), DType::F32, device)?;
-            let weight = vb
-                .get((output_dim, config.rank), "lora_B.weight")
-                .unwrap_or(weight);
+            let weight = vb.get((output_dim, config.rank), "lora_B.weight")
+                .or_else(|_| Tensor::zeros((output_dim, config.rank), DType::F32, device))?;
 
             let bias = if config.use_bias {
                 Some(vb.get(output_dim, "lora_B.bias")?)

@@ -146,6 +146,23 @@ typedef struct {
     int num_classes;
 } ClassificationResultWithProbs;
 
+// Qwen3 LoRA Generative Classifier structures
+typedef struct {
+    int class_id;
+    float confidence;
+    char* category_name;
+    float* probabilities;
+    int num_categories;
+    bool error;
+    char* error_message;
+} GenerativeClassificationResult;
+
+extern int init_qwen3_lora_classifier(const char* model_path);
+extern int classify_text_qwen3_lora(const char* text, GenerativeClassificationResult* result);
+extern int get_qwen3_lora_categories(char*** categories_out, int* num_categories);
+extern void free_generative_classification_result(GenerativeClassificationResult* result);
+extern void free_categories(char** categories, int num_categories);
+
 // ModernBERT Classification result structure
 typedef struct {
     int class;
@@ -1893,6 +1910,100 @@ func ClassifyBatchWithLoRA(texts []string) (LoRABatchResult, error) {
 
 	return result, nil
 }
+
+// ================================================================================================
+// QWEN3 LORA GENERATIVE CLASSIFIER GO BINDINGS
+// ================================================================================================
+
+// Qwen3LoRAResult represents the classification result from Qwen3 LoRA generative classifier
+type Qwen3LoRAResult struct {
+	ClassID       int
+	Confidence    float32
+	CategoryName  string
+	Probabilities []float32
+	NumCategories int
+}
+
+// InitQwen3LoRAClassifier initializes the Qwen3 LoRA generative classifier
+func InitQwen3LoRAClassifier(modelPath string) error {
+	cModelPath := C.CString(modelPath)
+	defer C.free(unsafe.Pointer(cModelPath))
+
+	result := C.init_qwen3_lora_classifier(cModelPath)
+	if result != 0 {
+		return fmt.Errorf("failed to initialize Qwen3 LoRA classifier (error code: %d)", result)
+	}
+
+	log.Printf("✅ Qwen3 LoRA classifier initialized from: %s", modelPath)
+	return nil
+}
+
+// ClassifyTextQwen3LoRA classifies text using Qwen3 LoRA generative classifier
+func ClassifyTextQwen3LoRA(text string) (*Qwen3LoRAResult, error) {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+
+	var result C.GenerativeClassificationResult
+	ret := C.classify_text_qwen3_lora(cText, &result)
+	defer C.free_generative_classification_result(&result)
+
+	if ret != 0 || result.error {
+		errMsg := "classification failed"
+		if result.error_message != nil {
+			errMsg = C.GoString(result.error_message)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	// Convert probabilities
+	numCats := int(result.num_categories)
+	probs := make([]float32, numCats)
+	if result.probabilities != nil && numCats > 0 {
+		probsSlice := (*[1000]C.float)(unsafe.Pointer(result.probabilities))[:numCats:numCats]
+		for i := 0; i < numCats; i++ {
+			probs[i] = float32(probsSlice[i])
+		}
+	}
+
+	goResult := &Qwen3LoRAResult{
+		ClassID:       int(result.class_id),
+		Confidence:    float32(result.confidence),
+		CategoryName:  C.GoString(result.category_name),
+		Probabilities: probs,
+		NumCategories: numCats,
+	}
+
+	return goResult, nil
+}
+
+// GetQwen3LoRACategories returns the list of categories from the Qwen3 LoRA classifier
+func GetQwen3LoRACategories() ([]string, error) {
+	var categoriesPtr **C.char
+	var numCategories C.int
+
+	ret := C.get_qwen3_lora_categories(&categoriesPtr, &numCategories)
+	if ret != 0 {
+		return nil, fmt.Errorf("failed to get categories (error code: %d)", ret)
+	}
+	defer C.free_categories(categoriesPtr, numCategories)
+
+	// Convert C strings to Go strings
+	count := int(numCategories)
+	categories := make([]string, count)
+
+	if categoriesPtr != nil && count > 0 {
+		catsSlice := (*[1000]*C.char)(unsafe.Pointer(categoriesPtr))[:count:count]
+		for i := 0; i < count; i++ {
+			categories[i] = C.GoString(catsSlice[i])
+		}
+	}
+
+	return categories, nil
+}
+
+// ================================================================================================
+// END OF QWEN3 LORA GENERATIVE CLASSIFIER GO BINDINGS
+// ================================================================================================
 
 // ================================================================================================
 // END OF LORA UNIFIED CLASSIFIER GO BINDINGS
