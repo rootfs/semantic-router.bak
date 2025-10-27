@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 
 [lib]
 name = "candle_semantic_router"
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = ["cuda"]
@@ -44,4 +44,12 @@ tokio = { version = "1.0", features = ["full"] }
 tempfile = "3.8"
 serial_test = "3.0"
 criterion = "0.5"
-async-std = { version = "1.12", features = ["attributes"] } 
+async-std = { version = "1.12", features = ["attributes"] }
+
+[[bench]]
+name = "classification_latency"
+harness = false
+
+[[bench]]
+name = "test_data_benchmark"
+harness = false 

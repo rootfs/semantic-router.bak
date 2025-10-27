@@ -173,6 +173,9 @@ struct Attention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
+    // QK-normalization (Qwen3 specific)
+    q_norm: RmsNorm,
+    k_norm: RmsNorm,
     // LoRA adapters for attention projections
     q_lora: Option<LoRAAdapter>,
     k_lora: Option<LoRAAdapter>,
@@ -246,6 +249,25 @@ impl Attention {
             (None, None, None, None)
         };
 
+        // Load Q and K normalization layers (Qwen3 uses QK-norm)
+        let q_norm_weight = vb.pp("q_norm").get((head_dim,), "weight")
+            .map_err(|e| UnifiedError::Model {
+                model_type: crate::core::ModelErrorType::Embedding,
+                operation: "load q_norm weight".to_string(),
+                source: e.to_string(),
+                context: None,
+            })?;
+        let q_norm = RmsNorm::new(q_norm_weight, 1e-6);
+
+        let k_norm_weight = vb.pp("k_norm").get((head_dim,), "weight")
+            .map_err(|e| UnifiedError::Model {
+                model_type: crate::core::ModelErrorType::Embedding,
+                operation: "load k_norm weight".to_string(),
+                source: e.to_string(),
+                context: None,
+            })?;
+        let k_norm = RmsNorm::new(k_norm_weight, 1e-6);
+
         let rotary_emb = RotaryEmbedding::new(
             head_dim,
             config.max_position_embeddings,
@@ -258,6 +280,8 @@ impl Attention {
             k_proj,
             v_proj,
             o_proj,
+            q_norm,
+            k_norm,
             q_lora,
             k_lora,
             v_lora,
@@ -351,36 +375,54 @@ impl Attention {
             })?;
         }
 
-        // Reshape for multi-head attention
+        // Apply QK-normalization (Qwen3 specific - normalize Q and K before RoPE)
         let q = q.reshape((batch_size, seq_len, self.num_heads, self.head_dim))
             .map_err(|e| UnifiedError::Processing {
-                operation: "reshape q".to_string(),
+                operation: "reshape q before norm".to_string(),
                 source: e.to_string(),
                 input_context: None,
-            })?
-            .transpose(1, 2)
+            })?;
+        
+        let q = self.q_norm.forward(&q).map_err(|e| UnifiedError::Model {
+            model_type: crate::core::ModelErrorType::Embedding,
+            operation: "forward q_norm".to_string(),
+            source: e.to_string(),
+            context: None,
+        })?;
+
+        let k = k.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))
+            .map_err(|e| UnifiedError::Processing {
+                operation: "reshape k before norm".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        
+        let k = self.k_norm.forward(&k).map_err(|e| UnifiedError::Model {
+            model_type: crate::core::ModelErrorType::Embedding,
+            operation: "forward k_norm".to_string(),
+            source: e.to_string(),
+            context: None,
+        })?;
+
+        // Transpose for attention computation
+        let q = q.transpose(1, 2)
             .map_err(|e| UnifiedError::Processing {
                 operation: "transpose q".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?;
 
-        let k = k.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))
-            .map_err(|e| UnifiedError::Processing {
-                operation: "reshape k".to_string(),
-                source: e.to_string(),
-                input_context: None,
-            })?
-            .transpose(1, 2)
+        let k = k.transpose(1, 2)
             .map_err(|e| UnifiedError::Processing {
                 operation: "transpose k".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?;
 
+        // Reshape V (no normalization for V)
         let v = v.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))
             .map_err(|e| UnifiedError::Processing {
-                operation: "reshape v".to_string(),
+                operation: "reshape q".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?
