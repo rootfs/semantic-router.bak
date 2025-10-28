@@ -992,6 +992,18 @@ impl Qwen3LoRAClassifier {
 
         // Load config from base model
         let config = Qwen3EmbeddingConfig::from_pretrained(&base_model_path)?;
+        
+        // DEBUG: Print config
+        if std::env::var("DEBUG_CONFIG").is_ok() {
+            eprintln!("\n[DEBUG CONFIG]");
+            eprintln!("  hidden_size: {}", config.hidden_size);
+            eprintln!("  num_hidden_layers: {}", config.num_hidden_layers);
+            eprintln!("  num_attention_heads: {}", config.num_attention_heads);
+            eprintln!("  num_key_value_heads: {}", config.num_key_value_heads);
+            eprintln!("  head_dim: {}", config.head_dim);
+            eprintln!("  vocab_size: {}", config.vocab_size);
+            eprintln!("  rope_theta: {}", config.rope_theta);
+        }
 
         // Load tokenizer from base model
         let tokenizer_path = base_dir.join("tokenizer.json");
@@ -1394,7 +1406,7 @@ impl Qwen3LoRAClassifier {
 
         // Extract logits for category tokens
         let mut category_logits = Vec::new();
-        for (idx, &token_id) in self.category_token_ids.iter().enumerate() {
+        for (_idx, &token_id) in self.category_token_ids.iter().enumerate() {
             let logit = last_logits
                 .i(token_id as usize)
                 .map_err(|e| UnifiedError::Processing {
@@ -1410,6 +1422,15 @@ impl Qwen3LoRAClassifier {
                 })?;
             
             category_logits.push(logit);
+        }
+        
+        // DEBUG: Print raw logits
+        if std::env::var("DEBUG_LOGITS").is_ok() {
+            eprintln!("\n[DEBUG] Sequence length: {}", seq_len);
+            eprintln!("[DEBUG] Raw category logits:");
+            for (i, (cat, logit)) in self.label_mapping.categories().iter().zip(category_logits.iter()).enumerate() {
+                eprintln!("  [{:2}] {:20}: {:8.3}", i, cat, logit);
+            }
         }
 
         // Apply softmax to get probabilities
