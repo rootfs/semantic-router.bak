@@ -24,9 +24,9 @@
 
 use crate::core::{ConfigErrorType, UnifiedError, UnifiedResult};
 use crate::model_architectures::lora::{LoRAAdapter, LoRAConfig};
+use crate::model_architectures::generative::qwen3_with_lora::{Config as Qwen3Config, ModelForCausalLM as Qwen3Model};
 use candle_core::{DType, Device, IndexOp, Tensor};
-use candle_nn::{Module, VarBuilder};
-use candle_transformers::models::qwen3::{Config as Qwen3Config, ModelForCausalLM as Qwen3Model};
+use candle_nn::VarBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -49,17 +49,13 @@ impl AdapterLabelMapping {
     }
 }
 
-/// LoRA adapter with metadata
+/// LoRA adapter metadata (adapters are injected into model, not stored here)
 struct LoadedAdapter {
     /// Adapter name (e.g., "category", "jailbreak")
     name: String,
     
     /// LoRA configuration (rank, alpha, etc.)
     lora_config: LoRAConfig,
-    
-    /// LoRA adapters for each layer
-    /// Key format: "layers.{layer_idx}.{module_name}" (e.g., "layers.0.q_proj")
-    adapters: HashMap<String, LoRAAdapter>,
     
     /// Label mapping for this adapter
     label_mapping: AdapterLabelMapping,
@@ -286,16 +282,23 @@ impl Qwen3MultiLoRAClassifier {
         // Prepare category tokens
         let category_token_ids = Self::prepare_category_tokens(&self.tokenizer, &label_mapping)?;
         
-        // Store adapter
+        // Inject LoRA adapters into the model
+        println!("  🔧 Injecting LoRA adapters into base model...");
+        let adapters_arc: HashMap<String, Arc<LoRAAdapter>> = adapters
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+        self.base_model.inject_lora_adapters(adapters_arc);
+        
+        // Store adapter metadata (adapters are now in the model)
         self.adapters.insert(adapter_name.to_string(), LoadedAdapter {
             name: adapter_name.to_string(),
             lora_config,
-            adapters,
             label_mapping,
             category_token_ids,
         });
         
-        println!("✅ Adapter '{}' loaded successfully\n", adapter_name);
+        println!("✅ Adapter '{}' loaded and injected successfully\n", adapter_name);
         
         Ok(())
     }

@@ -18,6 +18,7 @@ pub mod qwen3_causal;
 pub mod qwen3_lora_classifier;
 pub mod qwen3_official_lora_classifier;
 pub mod qwen3_multi_lora_classifier;
+pub mod qwen3_with_lora;
 
 pub use qwen3_causal::{Qwen3CausalLM, Qwen3CausalConfig, GenerationConfig, GenerationResult};
 pub use qwen3_lora_classifier::{Qwen3LoRAClassifier, LabelMapping, softmax};
