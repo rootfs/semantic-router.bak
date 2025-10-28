@@ -2,15 +2,18 @@
 //!
 //! Exposes the Qwen3 + LoRA classifier to Go via C ABI.
 
-use crate::model_architectures::generative::Qwen3LoRAClassifier;
+use crate::model_architectures::generative::{Qwen3LoRAClassifier, Qwen3MultiLoRAClassifier};
 use candle_core::Device;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
-/// Global classifier instance
+/// Global classifier instance (single adapter)
 static GLOBAL_QWEN3_CLASSIFIER: OnceLock<Qwen3LoRAClassifier> = OnceLock::new();
+
+/// Global multi-adapter classifier instance
+static GLOBAL_QWEN3_MULTI_CLASSIFIER: OnceLock<Mutex<Qwen3MultiLoRAClassifier>> = OnceLock::new();
 
 /// Generative classification result returned to Go
 #[repr(C)]
@@ -329,6 +332,337 @@ fn create_error_message(msg: &str) -> *mut c_char {
         Err(_) => ptr::null_mut(),
     }
 }
+
+// ================================================================================================
+// QWEN3 MULTI-LORA ADAPTER SYSTEM FFI
+// ================================================================================================
+
+/// Initialize Qwen3 Multi-LoRA classifier with base model
+///
+/// # Arguments
+/// - `base_model_path`: Path to Qwen3-0.6B base model directory
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+///
+/// # Safety
+/// - `base_model_path` must be a valid null-terminated C string
+#[no_mangle]
+pub extern "C" fn init_qwen3_multi_lora_classifier(base_model_path: *const c_char) -> i32 {
+    if base_model_path.is_null() {
+        eprintln!("Error: base_model_path is null");
+        return -1;
+    }
+
+    let base_model_path_str = unsafe {
+        match CStr::from_ptr(base_model_path).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error: invalid UTF-8 in base_model_path: {}", e);
+                return -1;
+            }
+        }
+    };
+
+    // Determine device (try GPU first, fall back to CPU)
+    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+
+    // Check if already initialized
+    if GLOBAL_QWEN3_MULTI_CLASSIFIER.get().is_some() {
+        println!("✅ Qwen3 Multi-LoRA classifier already initialized, reusing existing instance");
+        return 0;
+    }
+
+    // Load multi-adapter classifier
+    match Qwen3MultiLoRAClassifier::new(base_model_path_str, &device) {
+        Ok(classifier) => {
+            match GLOBAL_QWEN3_MULTI_CLASSIFIER.set(Mutex::new(classifier)) {
+                Ok(_) => {
+                    println!("✅ Qwen3 Multi-LoRA classifier initialized with base model: {}", base_model_path_str);
+                    0
+                }
+                Err(_) => {
+                    println!("✅ Qwen3 Multi-LoRA classifier already initialized (race condition), reusing");
+                    0
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: failed to load Qwen3 Multi-LoRA classifier: {}", e);
+            -1
+        }
+    }
+}
+
+/// Load a LoRA adapter for the multi-adapter system
+///
+/// # Arguments
+/// - `adapter_name`: Name for this adapter (e.g., "category", "jailbreak")
+/// - `adapter_path`: Path to LoRA adapter directory (containing adapter_model.safetensors, adapter_config.json, label_mapping.json)
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+///
+/// # Safety
+/// - Both arguments must be valid null-terminated C strings
+#[no_mangle]
+pub extern "C" fn load_qwen3_lora_adapter(
+    adapter_name: *const c_char,
+    adapter_path: *const c_char,
+) -> i32 {
+    if adapter_name.is_null() || adapter_path.is_null() {
+        eprintln!("Error: null pointer passed to load_qwen3_lora_adapter");
+        return -1;
+    }
+
+    let adapter_name_str = unsafe {
+        match CStr::from_ptr(adapter_name).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error: invalid UTF-8 in adapter_name: {}", e);
+                return -1;
+            }
+        }
+    };
+
+    let adapter_path_str = unsafe {
+        match CStr::from_ptr(adapter_path).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error: invalid UTF-8 in adapter_path: {}", e);
+                return -1;
+            }
+        }
+    };
+
+    // Get classifier
+    let classifier_mutex = match GLOBAL_QWEN3_MULTI_CLASSIFIER.get() {
+        Some(c) => c,
+        None => {
+            eprintln!("Error: Qwen3 Multi-LoRA classifier not initialized");
+            return -1;
+        }
+    };
+
+    // Load adapter
+    match classifier_mutex.lock() {
+        Ok(mut classifier) => {
+            match classifier.load_adapter(adapter_name_str, adapter_path_str) {
+                Ok(_) => {
+                    println!("✅ Loaded adapter '{}' from: {}", adapter_name_str, adapter_path_str);
+                    0
+                }
+                Err(e) => {
+                    eprintln!("Error: failed to load adapter '{}': {}", adapter_name_str, e);
+                    -1
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: failed to acquire lock: {}", e);
+            -1
+        }
+    }
+}
+
+/// Classify text using a specific LoRA adapter
+///
+/// # Arguments
+/// - `text`: Input text to classify (null-terminated C string)
+/// - `adapter_name`: Name of the adapter to use (e.g., "category", "jailbreak")
+/// - `result`: Pointer to GenerativeClassificationResult struct (allocated by caller)
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+///
+/// # Safety
+/// - All arguments must be valid pointers
+/// - Caller must free: result.category_name, result.probabilities, result.error_message
+#[no_mangle]
+pub extern "C" fn classify_with_qwen3_adapter(
+    text: *const c_char,
+    adapter_name: *const c_char,
+    result: *mut GenerativeClassificationResult,
+) -> i32 {
+    if text.is_null() || adapter_name.is_null() || result.is_null() {
+        eprintln!("Error: null pointer passed to classify_with_qwen3_adapter");
+        return -1;
+    }
+
+    let text_str = unsafe {
+        match CStr::from_ptr(text).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error: invalid UTF-8 in text: {}", e);
+                (*result) = GenerativeClassificationResult::default();
+                (*result).error_message = create_error_message(&format!("Invalid UTF-8: {}", e));
+                return -1;
+            }
+        }
+    };
+
+    let adapter_name_str = unsafe {
+        match CStr::from_ptr(adapter_name).to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error: invalid UTF-8 in adapter_name: {}", e);
+                (*result) = GenerativeClassificationResult::default();
+                (*result).error_message = create_error_message(&format!("Invalid UTF-8: {}", e));
+                return -1;
+            }
+        }
+    };
+
+    // Get classifier
+    let classifier_mutex = match GLOBAL_QWEN3_MULTI_CLASSIFIER.get() {
+        Some(c) => c,
+        None => {
+            eprintln!("Error: Qwen3 Multi-LoRA classifier not initialized");
+            unsafe {
+                (*result) = GenerativeClassificationResult::default();
+                (*result).error_message = create_error_message("Classifier not initialized");
+            }
+            return -1;
+        }
+    };
+
+    // Classify with adapter
+    match classifier_mutex.lock() {
+        Ok(mut classifier) => {
+            match classifier.classify_with_adapter(text_str, adapter_name_str) {
+                Ok(multi_result) => {
+                    // Convert MultiAdapterClassificationResult to GenerativeClassificationResult
+                    let category_name_c = match CString::new(multi_result.category.as_str()) {
+                        Ok(s) => s.into_raw(),
+                        Err(e) => {
+                            eprintln!("Error: failed to create category name C string: {}", e);
+                            unsafe {
+                                (*result) = GenerativeClassificationResult::default();
+                                (*result).error_message = create_error_message(&format!("Failed to create C string: {}", e));
+                            }
+                            return -1;
+                        }
+                    };
+                    
+                    // Find class_id from category name in all_categories
+                    let class_id = multi_result.all_categories.iter()
+                        .position(|cat| cat == &multi_result.category)
+                        .unwrap_or(0) as i32;
+                    
+                    // Allocate probabilities array
+                    let mut probabilities = multi_result.probabilities;
+                    let probs_ptr = probabilities.as_mut_ptr();
+                    let num_categories = probabilities.len();
+                    std::mem::forget(probabilities); // Prevent Rust from deallocating
+                    
+                    unsafe {
+                        (*result) = GenerativeClassificationResult {
+                            class_id,
+                            confidence: multi_result.confidence,
+                            category_name: category_name_c,
+                            probabilities: probs_ptr,
+                            num_categories: num_categories as i32,
+                            error: false,
+                            error_message: ptr::null_mut(),
+                        };
+                    }
+                    
+                    0
+                }
+                Err(e) => {
+                    eprintln!("Error: classification with adapter '{}' failed: {}", adapter_name_str, e);
+                    unsafe {
+                        (*result) = GenerativeClassificationResult::default();
+                        (*result).error_message = create_error_message(&format!("Classification failed: {}", e));
+                    }
+                    -1
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: failed to acquire lock: {}", e);
+            unsafe {
+                (*result) = GenerativeClassificationResult::default();
+                (*result).error_message = create_error_message(&format!("Failed to acquire lock: {}", e));
+            }
+            -1
+        }
+    }
+}
+
+/// Get list of loaded adapter names
+///
+/// # Arguments
+/// - `adapters_out`: Output pointer that will be set to point to array of C strings
+/// - `num_adapters`: Output parameter for number of adapters
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+///
+/// # Safety
+/// - Caller must free each string in the adapters array and the array itself
+#[no_mangle]
+pub extern "C" fn get_qwen3_loaded_adapters(
+    adapters_out: *mut *mut *mut c_char,
+    num_adapters: *mut i32,
+) -> i32 {
+    if adapters_out.is_null() || num_adapters.is_null() {
+        eprintln!("Error: null pointer passed to get_qwen3_loaded_adapters");
+        return -1;
+    }
+
+    let classifier_mutex = match GLOBAL_QWEN3_MULTI_CLASSIFIER.get() {
+        Some(c) => c,
+        None => {
+            eprintln!("Error: Qwen3 Multi-LoRA classifier not initialized");
+            return -1;
+        }
+    };
+
+    match classifier_mutex.lock() {
+        Ok(classifier) => {
+            let adapter_names = classifier.list_adapters();
+            let count = adapter_names.len();
+
+            // Allocate array of C strings
+            let mut c_strings: Vec<*mut c_char> = Vec::with_capacity(count);
+            for name in adapter_names {
+                match CString::new(name.as_str()) {
+                    Ok(s) => c_strings.push(s.into_raw()),
+                    Err(e) => {
+                        eprintln!("Error: failed to create adapter name C string: {}", e);
+                        // Free already allocated strings
+                        for ptr in c_strings {
+                            unsafe { let _ = CString::from_raw(ptr); }
+                        }
+                        return -1;
+                    }
+                }
+            }
+
+            // Transfer ownership to caller
+            unsafe {
+                *num_adapters = count as i32;
+                *adapters_out = c_strings.as_mut_ptr();
+            }
+            std::mem::forget(c_strings);
+
+            0
+        }
+        Err(e) => {
+            eprintln!("Error: failed to acquire lock: {}", e);
+            -1
+        }
+    }
+}
+
+// ================================================================================================
+// END OF QWEN3 MULTI-LORA ADAPTER SYSTEM FFI
+// ================================================================================================
 
 #[cfg(test)]
 mod tests {

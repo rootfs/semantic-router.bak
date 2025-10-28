@@ -1701,6 +1701,13 @@ const (
 	TestLongContextText     = "This is a longer text that might benefit from long-context embedding models like Qwen3 or Gemma"
 )
 
+// Test constants for Qwen3 Multi-LoRA
+const (
+	Qwen3BaseModelPath           = "../models/Qwen3-0.6B"
+	Qwen3CategoryAdapterPath     = "../models/qwen3_generative_classifier_r16_fixed"
+	// Add more adapter paths as available
+)
+
 // TestInitEmbeddingModels tests the embedding models initialization
 func TestInitEmbeddingModels(t *testing.T) {
 	t.Run("InitBothModels", func(t *testing.T) {
@@ -2121,3 +2128,296 @@ func BenchmarkGetEmbeddingWithDim(b *testing.B) {
 		})
 	}
 }
+
+// ================================================================================================
+// QWEN3 MULTI-LORA ADAPTER SYSTEM TESTS
+// ================================================================================================
+
+// TestQwen3MultiLoRAClassifier tests the Qwen3 Multi-LoRA adapter system
+func TestQwen3MultiLoRAClassifier(t *testing.T) {
+	t.Run("InitMultiLoRAClassifier", func(t *testing.T) {
+		err := InitQwen3MultiLoRAClassifier(Qwen3BaseModelPath)
+		if err != nil {
+			if isModelInitializationError(err) {
+				t.Skipf("Skipping Qwen3 Multi-LoRA tests due to model initialization error: %v", err)
+			}
+			t.Fatalf("Failed to initialize Qwen3 Multi-LoRA classifier: %v", err)
+		}
+		t.Log("✓ Qwen3 Multi-LoRA classifier initialized successfully")
+	})
+
+	t.Run("LoadCategoryAdapter", func(t *testing.T) {
+		err := LoadQwen3LoRAAdapter("category", Qwen3CategoryAdapterPath)
+		if err != nil {
+			if isModelInitializationError(err) {
+				t.Skipf("Skipping adapter loading tests due to model initialization error: %v", err)
+			}
+			t.Fatalf("Failed to load category adapter: %v", err)
+		}
+		t.Log("✓ Category adapter loaded successfully")
+	})
+
+	t.Run("ListLoadedAdapters", func(t *testing.T) {
+		adapters, err := GetQwen3LoadedAdapters()
+		if err != nil {
+			if isModelInitializationError(err) {
+				t.Skipf("Skipping list adapters test due to model initialization error: %v", err)
+			}
+			t.Fatalf("Failed to get loaded adapters: %v", err)
+		}
+
+		if len(adapters) == 0 {
+			t.Error("Expected at least one loaded adapter")
+		}
+
+		t.Logf("✓ Loaded adapters: %v", adapters)
+
+		// Check that "category" adapter is in the list
+		found := false
+		for _, name := range adapters {
+			if name == "category" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Expected 'category' adapter in loaded adapters list")
+		}
+	})
+
+	t.Run("ClassifyWithCategoryAdapter", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			text     string
+			expected string // Expected category (may not match for base-only model)
+		}{
+			{
+				name:     "Economics",
+				text:     "What is GDP and how does it measure economic growth?",
+				expected: "economics",
+			},
+			{
+				name:     "ComputerScience",
+				text:     "What is the difference between TCP and UDP protocols?",
+				expected: "computer science",
+			},
+			{
+				name:     "Physics",
+				text:     "What is Newton's second law of motion?",
+				expected: "physics",
+			},
+			{
+				name:     "Biology",
+				text:     "What is the primary function of ribosomes in cells?",
+				expected: "biology",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				result, err := ClassifyWithQwen3Adapter(tc.text, "category")
+				if err != nil {
+					if isModelInitializationError(err) {
+						t.Skipf("Skipping classification test due to model initialization error: %v", err)
+					}
+					t.Fatalf("Failed to classify with category adapter: %v", err)
+				}
+
+				// Validate result structure
+				if result.ClassID < 0 {
+					t.Errorf("Invalid class ID: %d", result.ClassID)
+				}
+
+				if result.Confidence < 0.0 || result.Confidence > 1.0 {
+					t.Errorf("Confidence out of range: %f", result.Confidence)
+				}
+
+				if result.CategoryName == "" {
+					t.Error("Category name is empty")
+				}
+
+				if len(result.Probabilities) != result.NumCategories {
+					t.Errorf("Probabilities length mismatch: got %d, expected %d",
+						len(result.Probabilities), result.NumCategories)
+				}
+
+				// Verify probabilities sum to ~1.0
+				sum := float32(0.0)
+				for _, prob := range result.Probabilities {
+					sum += prob
+					if prob < 0.0 || prob > 1.0 {
+						t.Errorf("Invalid probability value: %f", prob)
+					}
+				}
+				if math.Abs(float64(sum)-1.0) > 0.01 {
+					t.Errorf("Probabilities don't sum to 1.0: sum=%f", sum)
+				}
+
+				t.Logf("Text: %s", tc.text)
+				t.Logf("Predicted: %s (confidence: %.4f)", result.CategoryName, result.Confidence)
+				t.Logf("Expected: %s", tc.expected)
+				
+				// Note: With LoRA applied, accuracy should be ~71%
+				// Without checking expected match, just verify it's a valid category
+			})
+		}
+	})
+
+	t.Run("ClassifyWithNonExistentAdapter", func(t *testing.T) {
+		_, err := ClassifyWithQwen3Adapter("Test text", "nonexistent_adapter")
+		if err == nil {
+			t.Error("Expected error when using non-existent adapter")
+		} else {
+			t.Logf("✓ Correctly returned error for non-existent adapter: %v", err)
+		}
+	})
+}
+
+// TestQwen3MultiLoRAConcurrency tests concurrent classification with multiple adapters
+func TestQwen3MultiLoRAConcurrency(t *testing.T) {
+	// Initialize if not already done
+	err := InitQwen3MultiLoRAClassifier(Qwen3BaseModelPath)
+	if err != nil {
+		if isModelInitializationError(err) {
+			t.Skipf("Skipping concurrency tests due to model initialization error: %v", err)
+		}
+		// May already be initialized
+	}
+
+	err = LoadQwen3LoRAAdapter("category", Qwen3CategoryAdapterPath)
+	if err != nil {
+		if isModelInitializationError(err) {
+			t.Skipf("Skipping concurrency tests due to adapter loading error: %v", err)
+		}
+		// May already be loaded
+	}
+
+	const numGoroutines = 5
+	const numIterations = 3
+
+	testTexts := []string{
+		"What is the best strategy for corporate mergers?",
+		"How does photosynthesis work in plants?",
+		"What is the speed of light in vacuum?",
+		"What does GDP measure in an economy?",
+		"What is the difference between RAM and ROM?",
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines*numIterations)
+	results := make(chan string, numGoroutines*numIterations)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < numIterations; j++ {
+				text := testTexts[(id+j)%len(testTexts)]
+				result, err := ClassifyWithQwen3Adapter(text, "category")
+				if err != nil {
+					errors <- fmt.Errorf("goroutine %d iteration %d: %v", id, j, err)
+				} else {
+					results <- result.CategoryName
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+	close(results)
+
+	// Check for errors
+	errorCount := 0
+	for err := range errors {
+		t.Error(err)
+		errorCount++
+	}
+
+	// Check results
+	var categoryResults []string
+	for category := range results {
+		categoryResults = append(categoryResults, category)
+	}
+
+	if errorCount > 0 {
+		t.Fatalf("Concurrent classification failed with %d errors", errorCount)
+	}
+
+	expected := numGoroutines * numIterations
+	if len(categoryResults) != expected {
+		t.Errorf("Expected %d results, got %d", expected, len(categoryResults))
+	}
+
+	t.Logf("✓ Concurrent test passed: %d goroutines × %d iterations = %d successful classifications",
+		numGoroutines, numIterations, len(categoryResults))
+}
+
+// TestQwen3MultiLoRAEdgeCases tests edge cases for the multi-adapter system
+func TestQwen3MultiLoRAEdgeCases(t *testing.T) {
+	t.Run("EmptyText", func(t *testing.T) {
+		_, err := ClassifyWithQwen3Adapter("", "category")
+		if err == nil {
+			t.Error("Expected error for empty text")
+		} else {
+			t.Logf("✓ Correctly handled empty text: %v", err)
+		}
+	})
+
+	t.Run("VeryLongText", func(t *testing.T) {
+		// Test with text longer than typical token limit
+		longText := strings.Repeat("This is a very long text that exceeds typical token limits. ", 100)
+		result, err := ClassifyWithQwen3Adapter(longText, "category")
+		if err != nil {
+			if isModelInitializationError(err) {
+				t.Skipf("Skipping long text test due to model initialization error: %v", err)
+			}
+			t.Logf("Long text handling: %v", err)
+		} else {
+			t.Logf("✓ Handled long text successfully: category=%s, confidence=%.4f",
+				result.CategoryName, result.Confidence)
+		}
+	})
+
+	t.Run("SpecialCharacters", func(t *testing.T) {
+		specialText := "What is 特殊文字 and émojis 😀 in classification?"
+		result, err := ClassifyWithQwen3Adapter(specialText, "category")
+		if err != nil {
+			if isModelInitializationError(err) {
+				t.Skipf("Skipping special characters test due to model initialization error: %v", err)
+			}
+			t.Fatalf("Failed to handle special characters: %v", err)
+		}
+		t.Logf("✓ Handled special characters: category=%s", result.CategoryName)
+	})
+}
+
+// BenchmarkQwen3MultiLoRAClassification benchmarks the multi-adapter classification
+func BenchmarkQwen3MultiLoRAClassification(b *testing.B) {
+	err := InitQwen3MultiLoRAClassifier(Qwen3BaseModelPath)
+	if err != nil {
+		if isModelInitializationError(err) {
+			b.Skipf("Skipping benchmark due to model initialization error: %v", err)
+		}
+		b.Fatalf("Failed to initialize classifier: %v", err)
+	}
+
+	err = LoadQwen3LoRAAdapter("category", Qwen3CategoryAdapterPath)
+	if err != nil {
+		if isModelInitializationError(err) {
+			b.Skipf("Skipping benchmark due to adapter loading error: %v", err)
+		}
+		// May already be loaded
+	}
+
+	testText := "What is the difference between TCP and UDP protocols in computer networking?"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = ClassifyWithQwen3Adapter(testText, "category")
+	}
+}
+
+// ================================================================================================
+// END OF QWEN3 MULTI-LORA ADAPTER SYSTEM TESTS
+// ================================================================================================

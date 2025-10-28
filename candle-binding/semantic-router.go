@@ -163,6 +163,12 @@ extern int get_qwen3_lora_categories(char*** categories_out, int* num_categories
 extern void free_generative_classification_result(GenerativeClassificationResult* result);
 extern void free_categories(char** categories, int num_categories);
 
+// Qwen3 Multi-LoRA Adapter System
+extern int init_qwen3_multi_lora_classifier(const char* base_model_path);
+extern int load_qwen3_lora_adapter(const char* adapter_name, const char* adapter_path);
+extern int classify_with_qwen3_adapter(const char* text, const char* adapter_name, GenerativeClassificationResult* result);
+extern int get_qwen3_loaded_adapters(char*** adapters_out, int* num_adapters);
+
 // ModernBERT Classification result structure
 typedef struct {
     int class;
@@ -2003,6 +2009,111 @@ func GetQwen3LoRACategories() ([]string, error) {
 
 // ================================================================================================
 // END OF QWEN3 LORA GENERATIVE CLASSIFIER GO BINDINGS
+// ================================================================================================
+
+// ================================================================================================
+// QWEN3 MULTI-LORA ADAPTER SYSTEM GO BINDINGS
+// ================================================================================================
+
+// InitQwen3MultiLoRAClassifier initializes the Qwen3 Multi-LoRA classifier with base model
+func InitQwen3MultiLoRAClassifier(baseModelPath string) error {
+	cBaseModelPath := C.CString(baseModelPath)
+	defer C.free(unsafe.Pointer(cBaseModelPath))
+
+	result := C.init_qwen3_multi_lora_classifier(cBaseModelPath)
+	if result != 0 {
+		return fmt.Errorf("failed to initialize Qwen3 Multi-LoRA classifier (error code: %d)", result)
+	}
+
+	log.Printf("✅ Qwen3 Multi-LoRA classifier initialized from: %s", baseModelPath)
+	return nil
+}
+
+// LoadQwen3LoRAAdapter loads a LoRA adapter for the multi-adapter system
+func LoadQwen3LoRAAdapter(adapterName, adapterPath string) error {
+	cAdapterName := C.CString(adapterName)
+	defer C.free(unsafe.Pointer(cAdapterName))
+
+	cAdapterPath := C.CString(adapterPath)
+	defer C.free(unsafe.Pointer(cAdapterPath))
+
+	result := C.load_qwen3_lora_adapter(cAdapterName, cAdapterPath)
+	if result != 0 {
+		return fmt.Errorf("failed to load adapter '%s' (error code: %d)", adapterName, result)
+	}
+
+	log.Printf("✅ Loaded adapter '%s' from: %s", adapterName, adapterPath)
+	return nil
+}
+
+// ClassifyWithQwen3Adapter classifies text using a specific LoRA adapter
+func ClassifyWithQwen3Adapter(text, adapterName string) (*Qwen3LoRAResult, error) {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+
+	cAdapterName := C.CString(adapterName)
+	defer C.free(unsafe.Pointer(cAdapterName))
+
+	var result C.GenerativeClassificationResult
+	ret := C.classify_with_qwen3_adapter(cText, cAdapterName, &result)
+	defer C.free_generative_classification_result(&result)
+
+	if ret != 0 || result.error {
+		errMsg := fmt.Sprintf("classification with adapter '%s' failed", adapterName)
+		if result.error_message != nil {
+			errMsg = C.GoString(result.error_message)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	// Convert probabilities
+	numCats := int(result.num_categories)
+	probs := make([]float32, numCats)
+	if result.probabilities != nil && numCats > 0 {
+		probsSlice := (*[1000]C.float)(unsafe.Pointer(result.probabilities))[:numCats:numCats]
+		for i := 0; i < numCats; i++ {
+			probs[i] = float32(probsSlice[i])
+		}
+	}
+
+	goResult := &Qwen3LoRAResult{
+		ClassID:       int(result.class_id),
+		Confidence:    float32(result.confidence),
+		CategoryName:  C.GoString(result.category_name),
+		Probabilities: probs,
+		NumCategories: numCats,
+	}
+
+	return goResult, nil
+}
+
+// GetQwen3LoadedAdapters returns the list of currently loaded adapter names
+func GetQwen3LoadedAdapters() ([]string, error) {
+	var adaptersPtr **C.char
+	var numAdapters C.int
+
+	ret := C.get_qwen3_loaded_adapters(&adaptersPtr, &numAdapters)
+	if ret != 0 {
+		return nil, fmt.Errorf("failed to get loaded adapters (error code: %d)", ret)
+	}
+	defer C.free_categories(adaptersPtr, numAdapters)
+
+	// Convert C strings to Go strings
+	count := int(numAdapters)
+	adapters := make([]string, count)
+
+	if adaptersPtr != nil && count > 0 {
+		adaptersSlice := (*[1000]*C.char)(unsafe.Pointer(adaptersPtr))[:count:count]
+		for i := 0; i < count; i++ {
+			adapters[i] = C.GoString(adaptersSlice[i])
+		}
+	}
+
+	return adapters, nil
+}
+
+// ================================================================================================
+// END OF QWEN3 MULTI-LORA ADAPTER SYSTEM GO BINDINGS
 // ================================================================================================
 
 // ================================================================================================
