@@ -391,6 +391,12 @@ def main(
         gpu_id=gpu_id, auto_select=(gpu_id is None)
     )
     logger.info(f"Using device: {device_str} (GPU {selected_gpu})")
+    
+    # CRITICAL: Set CUDA_VISIBLE_DEVICES early to prevent DataParallel from using other GPUs
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(selected_gpu)
+    # After setting CUDA_VISIBLE_DEVICES, GPU will be referred to as cuda:0
+    device_str = "cuda:0"
+    logger.info(f"Set CUDA_VISIBLE_DEVICES={selected_gpu}, using device: {device_str}")
 
     clear_gpu_memory()
     log_memory_usage("Pre-training")
@@ -416,17 +422,27 @@ def main(
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # Load model for causal LM with memory optimization
+    # Use F32 for training (more stable), will convert to BF16 for Candle inference later
+    logger.info("Using F32 dtype for training (more stable than BF16)")
+    
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
+        torch_dtype=torch.float32,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
     )
 
     # Move to GPU using device from set_gpu_device utility
-    model = model.to(device_str)
+    # Device is now cuda:0 after CUDA_VISIBLE_DEVICES is set
+    device = torch.device(device_str)
+    model = model.to(device)
 
     # Prepare model for training
     model.config.use_cache = False  # Required for training
+    
+    # Enable gradient checkpointing for memory efficiency
+    model.gradient_checkpointing_enable()
+    model.enable_input_require_grads()  # Required for gradient checkpointing with LoRA
 
     # Create LoRA configuration
     target_modules = get_qwen3_target_modules()
@@ -476,7 +492,7 @@ def main(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,  # Configurable via parameter
-        per_device_eval_batch_size=batch_size,
+        per_device_eval_batch_size=1,  # Reduce eval batch size to save memory
         gradient_accumulation_steps=max(
             1, 16 // batch_size
         ),  # Maintain effective batch size of 16, minimum 1
@@ -484,18 +500,23 @@ def main(
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
         logging_steps=10,
-        eval_strategy="epoch",
+        eval_strategy="no",  # Disable evaluation during training to save memory
         save_strategy="no",  # Don't save intermediate checkpoints (saves disk space!)
         save_total_limit=1,  # Keep only 1 checkpoint
         warmup_ratio=0.1,
         lr_scheduler_type="cosine",
-        fp16=False,  # Disable fp16 to avoid gradient issues
-        gradient_checkpointing=False,  # Disable to avoid gradient issues
+        bf16=False,  # Use F32 for training (more stable)
+        fp16=False,  # Use F32 for training (more stable)
+        gradient_checkpointing=True,  # Enable to save memory (trades compute for memory)
+        gradient_checkpointing_kwargs={"use_reentrant": False},  # Better for BF16
         dataloader_num_workers=num_workers,  # Configurable workers (0=single process, 2-4=multiprocessing)
         remove_unused_columns=False,  # Keep all columns
         max_grad_norm=1.0,  # Gradient clipping for stability
         optim="adamw_torch",  # Use PyTorch AdamW
         prediction_loss_only=True,  # Only compute loss, don't collect predictions (saves memory!)
+        # Memory optimizations
+        dataloader_pin_memory=False,  # Disable pin memory to save GPU memory
+        auto_find_batch_size=False,  # Don't auto-adjust batch size
     )
 
     # Create trainer (no compute_metrics needed since prediction_loss_only=True)
@@ -635,22 +656,12 @@ def demo_inference(model_path: str, model_name: str = "Qwen/Qwen3-0.6B"):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # Load base model with appropriate dtype
-        # Check for GPU capability and use float16 only if supported
-        use_fp16 = False
-        if torch.cuda.is_available():
-            # Check if GPU supports efficient float16 (compute capability >= 7.0)
-            try:
-                compute_capability = torch.cuda.get_device_capability()
-                use_fp16 = (
-                    compute_capability[0] >= 7
-                )  # Volta and newer support efficient FP16
-            except Exception:
-                use_fp16 = False
+        # Load base model with F32 (matches training)
+        logger.info("Using F32 dtype for inference (matches training)")
 
         base_model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16 if use_fp16 else torch.float32,
+            torch_dtype=torch.float32,
             device_map="auto" if torch.cuda.is_available() else None,
             trust_remote_code=True,
         )

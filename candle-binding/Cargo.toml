@@ -52,4 +52,8 @@ harness = false
 
 [[bench]]
 name = "test_data_benchmark"
+harness = false
+
+[[bench]]
+name = "lora_benchmark"
 harness = false 

@@ -22,8 +22,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 
-// Use println! instead of log macros for now (log crate not configured in all environments)
-
 /// Rotary Position Embedding (RoPE)
 struct RotaryEmbedding {
     sin: Tensor,
@@ -302,8 +300,20 @@ impl Attention {
             }
         })?;
 
+        // Get the dtype from the q_proj weights to ensure consistency
+        let target_dtype = self.q_proj.weight().dtype();
+        
+        // Ensure hidden_states matches model dtype before LoRA operations
+        let hidden_states = hidden_states.to_dtype(target_dtype).map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert hidden_states to model dtype in attention".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
+        })?;
+
         // Project Q, K, V with LoRA
-        let mut q = self.q_proj.forward(hidden_states).map_err(|e| {
+        let mut q = self.q_proj.forward(&hidden_states).map_err(|e| {
             UnifiedError::Model {
                 model_type: crate::core::ModelErrorType::Embedding,
                 operation: "forward q_proj".to_string(),
@@ -312,7 +322,7 @@ impl Attention {
             }
         })?;
         if let Some(ref q_lora) = self.q_lora {
-            let q_lora_out = q_lora.forward(hidden_states, false).map_err(|e| {
+            let q_lora_out = q_lora.forward(&hidden_states, false).map_err(|e| {
                 UnifiedError::Model {
                     model_type: crate::core::ModelErrorType::Embedding,
                     operation: "forward q_lora".to_string(),
@@ -327,7 +337,7 @@ impl Attention {
             })?;
         }
 
-        let mut k = self.k_proj.forward(hidden_states).map_err(|e| {
+        let mut k = self.k_proj.forward(&hidden_states).map_err(|e| {
             UnifiedError::Model {
                 model_type: crate::core::ModelErrorType::Embedding,
                 operation: "forward k_proj".to_string(),
@@ -336,7 +346,7 @@ impl Attention {
             }
         })?;
         if let Some(ref k_lora) = self.k_lora {
-            let k_lora_out = k_lora.forward(hidden_states, false).map_err(|e| {
+            let k_lora_out = k_lora.forward(&hidden_states, false).map_err(|e| {
                 UnifiedError::Model {
                     model_type: crate::core::ModelErrorType::Embedding,
                     operation: "forward k_lora".to_string(),
@@ -351,7 +361,7 @@ impl Attention {
             })?;
         }
 
-        let mut v = self.v_proj.forward(hidden_states).map_err(|e| {
+        let mut v = self.v_proj.forward(&hidden_states).map_err(|e| {
             UnifiedError::Model {
                 model_type: crate::core::ModelErrorType::Embedding,
                 operation: "forward v_proj".to_string(),
@@ -360,7 +370,7 @@ impl Attention {
             }
         })?;
         if let Some(ref v_lora) = self.v_lora {
-            let v_lora_out = v_lora.forward(hidden_states, false).map_err(|e| {
+            let v_lora_out = v_lora.forward(&hidden_states, false).map_err(|e| {
                 UnifiedError::Model {
                     model_type: crate::core::ModelErrorType::Embedding,
                     operation: "forward v_lora".to_string(),
@@ -471,6 +481,15 @@ impl Attention {
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights).map_err(|e| {
             UnifiedError::Processing {
                 operation: "softmax attention".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
+        })?;
+        
+        // Convert attention weights to match target dtype (softmax returns F32)
+        let attn_weights = attn_weights.to_dtype(target_dtype).map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert attention weights to target dtype".to_string(),
                 source: e.to_string(),
                 input_context: None,
             }
@@ -633,8 +652,20 @@ impl MLP {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> UnifiedResult<Tensor> {
+        // Get the dtype from the gate_proj weights to ensure consistency
+        let target_dtype = self.gate_proj.weight().dtype();
+        
+        // Ensure hidden_states matches model dtype before LoRA operations
+        let hidden_states = hidden_states.to_dtype(target_dtype).map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert hidden_states to model dtype in MLP".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
+        })?;
+        
         // Gate projection with LoRA
-        let mut gate = self.gate_proj.forward(hidden_states).map_err(|e| {
+        let mut gate = self.gate_proj.forward(&hidden_states).map_err(|e| {
             UnifiedError::Model {
                 model_type: crate::core::ModelErrorType::Embedding,
                 operation: "forward gate_proj".to_string(),
@@ -643,7 +674,7 @@ impl MLP {
             }
         })?;
         if let Some(ref gate_lora) = self.gate_lora {
-            let gate_lora_out = gate_lora.forward(hidden_states, false).map_err(|e| {
+            let gate_lora_out = gate_lora.forward(&hidden_states, false).map_err(|e| {
                 UnifiedError::Model {
                     model_type: crate::core::ModelErrorType::Embedding,
                     operation: "forward gate_lora".to_string(),
@@ -665,7 +696,7 @@ impl MLP {
         })?;
 
         // Up projection with LoRA
-        let mut up = self.up_proj.forward(hidden_states).map_err(|e| {
+        let mut up = self.up_proj.forward(&hidden_states).map_err(|e| {
             UnifiedError::Model {
                 model_type: crate::core::ModelErrorType::Embedding,
                 operation: "forward up_proj".to_string(),
@@ -674,7 +705,7 @@ impl MLP {
             }
         })?;
         if let Some(ref up_lora) = self.up_lora {
-            let up_lora_out = up_lora.forward(hidden_states, false).map_err(|e| {
+            let up_lora_out = up_lora.forward(&hidden_states, false).map_err(|e| {
                 UnifiedError::Model {
                     model_type: crate::core::ModelErrorType::Embedding,
                     operation: "forward up_lora".to_string(),
@@ -812,6 +843,19 @@ impl Qwen3DecoderLayer {
     }
 }
 
+/// Classification result using logit extraction
+#[derive(Debug, Clone)]
+pub struct ClassificationResult {
+    /// Category index (0-based)
+    pub class: i32,
+    /// Category name
+    pub category: String,
+    /// Classification confidence (0.0-1.0)
+    pub confidence: f32,
+    /// Full probability distribution over all categories
+    pub probabilities: Vec<f32>,
+}
+
 /// Label mapping for classification (loaded from label_mapping.json)
 #[derive(Debug, Clone, Deserialize)]
 pub struct LabelMapping {
@@ -901,6 +945,9 @@ pub struct Qwen3LoRAClassifier {
     
     /// Device
     device: Device,
+    
+    /// Model dtype (BF16 on CUDA, F32 on CPU)
+    dtype: DType,
 }
 
 impl Qwen3LoRAClassifier {
@@ -963,11 +1010,16 @@ impl Qwen3LoRAClassifier {
         let label_mapping_path = adapter_dir.join("label_mapping.json");
         let label_mapping = LabelMapping::from_file(&label_mapping_path)?;
 
+        // Determine dtype based on device (BF16 on CUDA, F32 on CPU)
+        // Training script now saves adapters in BF16 format for CUDA compatibility
+        let dtype = if device.is_cuda() { DType::BF16 } else { DType::F32 };
+        println!("  Model dtype: {:?}", dtype);
+
         // Load base model weights
-        let vb = Self::load_weights(base_dir, device)?;
+        let vb = Self::load_weights(base_dir, device, dtype)?;
 
         // Load LoRA adapter config and weights
-        let (lora_adapter_info, lora_config, lora_vb) = Self::load_lora_adapter(adapter_dir, device)?;
+        let (lora_adapter_info, lora_config, lora_vb) = Self::load_lora_adapter(adapter_dir, device, dtype)?;
 
         // Create model components
         let embeddings = candle_nn::embedding(
@@ -1041,11 +1093,12 @@ impl Qwen3LoRAClassifier {
             label_mapping,
             category_token_ids,
             device: device.clone(),
+            dtype,
         })
     }
 
     /// Load LoRA adapter configuration and weights
-    fn load_lora_adapter<'a>(adapter_dir: &Path, device: &'a Device) -> UnifiedResult<(LoRAAdapterInfo, Option<LoRAConfig>, Option<VarBuilder<'a>>)> {
+    fn load_lora_adapter<'a>(adapter_dir: &Path, device: &'a Device, dtype: DType) -> UnifiedResult<(LoRAAdapterInfo, Option<LoRAConfig>, Option<VarBuilder<'a>>)> {
         // Load adapter config
         let config_path = adapter_dir.join("adapter_config.json");
         
@@ -1106,9 +1159,10 @@ impl Qwen3LoRAClassifier {
         }
 
         println!("  Loading LoRA weights from: {:?}", adapter_weights_path);
+        println!("  Loading LoRA weights with dtype: {:?}", dtype);
         
         let lora_vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[adapter_weights_path], DType::F32, device).map_err(
+            VarBuilder::from_mmaped_safetensors(&[adapter_weights_path], dtype, device).map_err(
                 |e| UnifiedError::Model {
                     model_type: crate::core::ModelErrorType::Embedding,
                     operation: "load LoRA weights".to_string(),
@@ -1130,7 +1184,7 @@ impl Qwen3LoRAClassifier {
     }
 
     /// Load model weights from safetensors file
-    fn load_weights<'a>(model_dir: &Path, device: &'a Device) -> UnifiedResult<VarBuilder<'a>> {
+    fn load_weights<'a>(model_dir: &Path, device: &'a Device, dtype: DType) -> UnifiedResult<VarBuilder<'a>> {
         let weights_path = model_dir.join("model.safetensors");
         
         if !weights_path.exists() {
@@ -1141,8 +1195,10 @@ impl Qwen3LoRAClassifier {
             });
         }
 
+        println!("  Loading base model weights with dtype: {:?}", dtype);
+
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, device).map_err(
+            VarBuilder::from_mmaped_safetensors(&[weights_path], dtype, device).map_err(
                 |e| UnifiedError::Model {
                     model_type: crate::core::ModelErrorType::Embedding,
                     operation: "load weights".to_string(),
@@ -1220,14 +1276,19 @@ impl Qwen3LoRAClassifier {
         )
     }
 
-    /// Classify text and return logits for each category
+    /// Classify text using logit extraction (fast, single forward pass)
     ///
-    /// This is a simplified implementation that shows the classification interface.
-    /// A full implementation would run the actual forward pass through transformer layers.
+    /// This method matches the implementation in qwen3_causal.rs:
+    /// - Single forward pass through the model
+    /// - Extract logits for category tokens
+    /// - Apply softmax to get probabilities
+    ///
+    /// # Arguments
+    /// - `text`: Input text to classify
     ///
     /// # Returns
-    /// Vector of logits, one per category
-    pub fn classify(&self, text: &str) -> UnifiedResult<Vec<f32>> {
+    /// Classification result with category, confidence, and probability distribution
+    pub fn classify(&self, text: &str) -> UnifiedResult<ClassificationResult> {
         // Format prompt
         let prompt = self.format_prompt(text);
 
@@ -1266,8 +1327,17 @@ impl Qwen3LoRAClassifier {
                 context: None,
             }
         })?;
+        
+        // Convert to model dtype (critical for BF16 support)
+        hidden_states = hidden_states.to_dtype(self.dtype).map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert hidden_states to model dtype".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
+        })?;
 
-        // Step 2: Run through all transformer layers (full Qwen3 forward pass)
+        // Step 2: Run through all transformer layers (full Qwen3 forward pass with LoRA)
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             hidden_states = layer.forward(&hidden_states).map_err(|e| UnifiedError::Model {
                 model_type: crate::core::ModelErrorType::Embedding,
@@ -1283,6 +1353,15 @@ impl Qwen3LoRAClassifier {
             operation: "forward norm".to_string(),
             source: e.to_string(),
             context: None,
+        })?;
+        
+        // Convert to model dtype after norm (RmsNorm might return F32)
+        let hidden_states = hidden_states.to_dtype(self.dtype).map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert hidden_states to model dtype after norm".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
         })?;
 
         // Step 4: Project to vocabulary logits
@@ -1308,12 +1387,17 @@ impl Qwen3LoRAClassifier {
                 operation: "index last position".to_string(),
                 source: e.to_string(),
                 input_context: None,
+            })?
+            .to_dtype(DType::F32)
+            .map_err(|e| UnifiedError::Processing {
+                operation: "convert logits to f32".to_string(),
+                source: e.to_string(),
+                input_context: None,
             })?;
 
         // Extract logits for category tokens
-        let categories = self.label_mapping.categories();  // Store to avoid temporary
         let mut category_logits = Vec::new();
-        for (idx, &token_id) in self.category_token_ids.iter().enumerate() {
+        for &token_id in self.category_token_ids.iter() {
             let logit = last_logits
                 .i(token_id as usize)
                 .map_err(|e| UnifiedError::Processing {
@@ -1331,7 +1415,237 @@ impl Qwen3LoRAClassifier {
             category_logits.push(logit);
         }
 
-        Ok(category_logits)
+        // Apply softmax to get probabilities
+        let category_logits_tensor = Tensor::from_vec(
+            category_logits,
+            (self.category_token_ids.len(),),
+            &self.device,
+        )
+        .map_err(|e| UnifiedError::Processing {
+            operation: "create category logits tensor".to_string(),
+            source: e.to_string(),
+            input_context: None,
+        })?;
+        
+        let probabilities = candle_nn::ops::softmax_last_dim(&category_logits_tensor)
+            .map_err(|e| UnifiedError::Processing {
+                operation: "softmax probabilities".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        
+        let probs_vec = probabilities.to_vec1::<f32>().map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert probabilities to vec".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
+        })?;
+        
+        // Find best category
+        let best_idx = probs_vec
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
+        
+        let best_confidence = probs_vec[best_idx];
+        let categories = self.label_mapping.categories();
+        let best_category = categories[best_idx].clone();
+        
+        Ok(ClassificationResult {
+            class: best_idx as i32,
+            category: best_category,
+            confidence: best_confidence,
+            probabilities: probs_vec,
+        })
+    }
+    
+    /// Classify multiple texts in a batch (optimized for concurrent requests)
+    ///
+    /// # Arguments
+    /// - `texts`: Array of texts to classify
+    ///
+    /// # Returns
+    /// Vector of classification results, one per input text
+    pub fn classify_batch(&self, texts: &[&str]) -> UnifiedResult<Vec<ClassificationResult>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        
+        // Tokenize all texts
+        let encodings: Vec<_> = texts
+            .iter()
+            .map(|text| {
+                let prompt = self.format_prompt(text);
+                self.tokenizer.encode(prompt, true).map_err(|e| {
+                    UnifiedError::Configuration {
+                        operation: "tokenization".to_string(),
+                        source: ConfigErrorType::ParseError(e.to_string()),
+                        context: Some("Failed to tokenize batch input".to_string()),
+                    }
+                })
+            })
+            .collect::<UnifiedResult<Vec<_>>>()?;
+        
+        // Find max length and pad all sequences
+        let max_len = encodings.iter().map(|e| e.len()).max().unwrap_or(0);
+        let pad_token_id = self.tokenizer.get_padding()
+            .map(|p| p.pad_id)
+            .unwrap_or(0);
+        
+        let mut batch_ids = Vec::new();
+        for encoding in &encodings {
+            let mut ids = encoding.get_ids().to_vec();
+            ids.resize(max_len, pad_token_id);
+            batch_ids.extend(ids);
+        }
+        
+        // Create batched tensor [batch_size, seq_len]
+        let batch_tensor = Tensor::from_vec(batch_ids, (texts.len(), max_len), &self.device)
+            .map_err(|e| UnifiedError::Processing {
+                operation: "create batch tensor".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        
+        // Single forward pass for entire batch
+        // Step 1: Embed tokens
+        let mut hidden_states = self.embeddings.forward(&batch_tensor).map_err(|e| {
+            UnifiedError::Model {
+                model_type: crate::core::ModelErrorType::Embedding,
+                operation: "forward embeddings (batch)".to_string(),
+                source: e.to_string(),
+                context: None,
+            }
+        })?;
+        
+        // Convert to model dtype (critical for BF16 support)
+        hidden_states = hidden_states.to_dtype(self.dtype).map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert hidden_states to model dtype (batch)".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
+        })?;
+
+        // Step 2: Run through all transformer layers
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            hidden_states = layer.forward(&hidden_states).map_err(|e| UnifiedError::Model {
+                model_type: crate::core::ModelErrorType::Embedding,
+                operation: format!("forward layer {} (batch)", layer_idx),
+                source: e.to_string(),
+                context: None,
+            })?;
+        }
+
+        // Step 3: Apply final norm
+        let hidden_states = self.norm.forward(&hidden_states).map_err(|e| UnifiedError::Model {
+            model_type: crate::core::ModelErrorType::Embedding,
+            operation: "forward norm (batch)".to_string(),
+            source: e.to_string(),
+            context: None,
+        })?;
+        
+        // Convert to model dtype after norm (RmsNorm might return F32)
+        let hidden_states = hidden_states.to_dtype(self.dtype).map_err(|e| {
+            UnifiedError::Processing {
+                operation: "convert hidden_states to model dtype after norm (batch)".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            }
+        })?;
+
+        // Step 4: Project to vocabulary logits
+        let logits = self.lm_head.forward(&hidden_states).map_err(|e| {
+            UnifiedError::Model {
+                model_type: crate::core::ModelErrorType::Embedding,
+                operation: "forward lm_head (batch)".to_string(),
+                source: e.to_string(),
+                context: None,
+            }
+        })?;
+        
+        // Process each sample in the batch
+        let mut results = Vec::with_capacity(texts.len());
+        let categories = self.label_mapping.categories();
+        
+        for i in 0..texts.len() {
+            // Get last position logits for this sample
+            let last_logits = logits
+                .i((i, max_len - 1, ..))
+                .map_err(|e| UnifiedError::Processing {
+                    operation: format!("extract logits for sample {}", i),
+                    source: e.to_string(),
+                    input_context: None,
+                })?
+                .to_dtype(DType::F32)
+                .map_err(|e| UnifiedError::Processing {
+                    operation: "convert to f32".to_string(),
+                    source: e.to_string(),
+                    input_context: None,
+                })?;
+            
+            // Extract category logits
+            let category_logits: Vec<f32> = self.category_token_ids
+                .iter()
+                .map(|&token_id| {
+                    last_logits
+                        .i(token_id as usize)
+                        .and_then(|t| t.to_scalar::<f32>())
+                        .map_err(|e| UnifiedError::Processing {
+                            operation: format!("extract logit for token {}", token_id),
+                            source: e.to_string(),
+                            input_context: None,
+                        })
+                })
+                .collect::<UnifiedResult<Vec<f32>>>()?;
+            
+            // Softmax
+            let category_logits_tensor = Tensor::from_vec(
+                category_logits,
+                (self.category_token_ids.len(),),
+                &self.device,
+            )
+            .map_err(|e| UnifiedError::Processing {
+                operation: "create logits tensor".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+            
+            let probabilities = candle_nn::ops::softmax_last_dim(&category_logits_tensor)
+                .map_err(|e| UnifiedError::Processing {
+                    operation: "softmax".to_string(),
+                    source: e.to_string(),
+                    input_context: None,
+                })?;
+            
+            let probs_vec = probabilities.to_vec1::<f32>().map_err(|e| {
+                UnifiedError::Processing {
+                    operation: "convert probabilities".to_string(),
+                    source: e.to_string(),
+                    input_context: None,
+                }
+            })?;
+            
+            // Find best
+            let best_idx = probs_vec
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            
+            results.push(ClassificationResult {
+                class: best_idx as i32,
+                category: categories[best_idx].clone(),
+                confidence: probs_vec[best_idx],
+                probabilities: probs_vec,
+            });
+        }
+        
+        Ok(results)
     }
 
     /// Get categories

@@ -163,22 +163,12 @@ pub extern "C" fn classify_text_qwen3_lora(
 
     // Classify
     match classifier.classify(text_str) {
-        Ok(logits) => {
-            // Convert logits to probabilities
-            let probabilities = softmax(&logits);
-            
-            // Find best class
-            let (best_idx, best_prob) = probabilities
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                .unwrap_or((0, &0.0));
-            
-            let best_prob_val = *best_prob; // Copy the value before moving probabilities
-            
-            // Get category names
-            let categories = classifier.categories();
-            let best_category = &categories[best_idx];
+        Ok(classification_result) => {
+            // Extract fields from ClassificationResult
+            let best_idx = classification_result.class as usize;
+            let best_category = classification_result.category;
+            let best_confidence = classification_result.confidence;
+            let mut probabilities = classification_result.probabilities;
             
             // Allocate C strings and arrays
             let category_name_c = match CString::new(best_category.as_str()) {
@@ -194,17 +184,17 @@ pub extern "C" fn classify_text_qwen3_lora(
             };
             
             // Allocate probabilities array
-            let mut probs_vec = probabilities;
-            let probs_ptr = probs_vec.as_mut_ptr();
-            std::mem::forget(probs_vec); // Prevent Rust from deallocating
+            let probs_ptr = probabilities.as_mut_ptr();
+            let num_categories = probabilities.len();
+            std::mem::forget(probabilities); // Prevent Rust from deallocating
             
             unsafe {
                 (*result) = GenerativeClassificationResult {
                     class_id: best_idx as i32,
-                    confidence: best_prob_val,
+                    confidence: best_confidence,
                     category_name: category_name_c,
                     probabilities: probs_ptr,
-                    num_categories: categories.len() as i32,
+                    num_categories: num_categories as i32,
                     error: false,
                     error_message: ptr::null_mut(),
                 };
