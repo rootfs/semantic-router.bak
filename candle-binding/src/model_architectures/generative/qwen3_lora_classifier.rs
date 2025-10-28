@@ -22,6 +22,9 @@ use std::path::Path;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 
+// Use official Candle RoPE implementation (optimized with CUDA/Metal kernels)
+use candle_nn::rotary_emb;
+
 /// Rotary Position Embedding (RoPE)
 struct RotaryEmbedding {
     sin: Tensor,
@@ -108,60 +111,29 @@ impl RotaryEmbedding {
             }
         })?;
 
-        let q_embed = Self::rotate_half(q, &cos, &sin)?;
-        let k_embed = Self::rotate_half(k, &cos, &sin)?;
-        Ok((q_embed, k_embed))
-    }
-
-    fn rotate_half(x: &Tensor, cos: &Tensor, sin: &Tensor) -> UnifiedResult<Tensor> {
-        let half_dim = x.dim(D::Minus1).map_err(|e| UnifiedError::Processing {
-            operation: "get dim".to_string(),
+        // Use official candle_nn::rotary_emb::rope (optimized CUDA/Metal kernels)
+        // CRITICAL: .contiguous() is required before RoPE application
+        let q_embed = rotary_emb::rope(&q.contiguous().map_err(|e| UnifiedError::Processing {
+            operation: "make q contiguous for RoPE".to_string(),
             source: e.to_string(),
             input_context: None,
-        })? / 2;
+        })?, &cos, &sin).map_err(|e| UnifiedError::Processing {
+            operation: "apply RoPE to q".to_string(),
+            source: e.to_string(),
+            input_context: None,
+        })?;
         
-        let x1 = x.narrow(D::Minus1, 0, half_dim).map_err(|e| {
-            UnifiedError::Processing {
-                operation: "narrow x1".to_string(),
-                source: e.to_string(),
-                input_context: None,
-            }
-        })?;
-        let x2 = x.narrow(D::Minus1, half_dim, half_dim).map_err(|e| {
-            UnifiedError::Processing {
-                operation: "narrow x2".to_string(),
-                source: e.to_string(),
-                input_context: None,
-            }
-        })?;
-
-        let x_rotated = Tensor::cat(&[&x2.neg().map_err(|e| UnifiedError::Processing {
-            operation: "negate x2".to_string(),
+        let k_embed = rotary_emb::rope(&k.contiguous().map_err(|e| UnifiedError::Processing {
+            operation: "make k contiguous for RoPE".to_string(),
             source: e.to_string(),
             input_context: None,
-        })?, &x1], D::Minus1).map_err(|e| {
-            UnifiedError::Processing {
-                operation: "concat rotated".to_string(),
-                source: e.to_string(),
-                input_context: None,
-            }
-        })?;
-
-        let result = (x.broadcast_mul(cos).map_err(|e| UnifiedError::Processing {
-            operation: "mul cos".to_string(),
-            source: e.to_string(),
-            input_context: None,
-        })? + x_rotated.broadcast_mul(sin).map_err(|e| UnifiedError::Processing {
-            operation: "mul sin".to_string(),
-            source: e.to_string(),
-            input_context: None,
-        })?).map_err(|e| UnifiedError::Processing {
-            operation: "add rotary components".to_string(),
+        })?, &cos, &sin).map_err(|e| UnifiedError::Processing {
+            operation: "apply RoPE to k".to_string(),
             source: e.to_string(),
             input_context: None,
         })?;
-
-        Ok(result)
+        
+        Ok((q_embed, k_embed))
     }
 }
 
@@ -255,7 +227,8 @@ impl Attention {
                 source: e.to_string(),
                 context: None,
             })?;
-        let q_norm = RmsNorm::new(q_norm_weight, 1e-6);
+        // FIXED: Use config.rms_norm_eps instead of hardcoded 1e-6
+        let q_norm = RmsNorm::new(q_norm_weight, config.rms_norm_eps);
 
         let k_norm_weight = vb.pp("k_norm").get((head_dim,), "weight")
             .map_err(|e| UnifiedError::Model {
@@ -264,7 +237,8 @@ impl Attention {
                 source: e.to_string(),
                 context: None,
             })?;
-        let k_norm = RmsNorm::new(k_norm_weight, 1e-6);
+        // FIXED: Use config.rms_norm_eps instead of hardcoded 1e-6
+        let k_norm = RmsNorm::new(k_norm_weight, config.rms_norm_eps);
 
         let rotary_emb = RotaryEmbedding::new(
             head_dim,
