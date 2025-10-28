@@ -386,45 +386,73 @@ impl Attention {
         }
 
         // Apply QK-normalization (Qwen3 specific - normalize Q and K before RoPE)
+        // CRITICAL: Must match official Candle implementation order!
+        // 1. Reshape to (B, L, H, D)
         let q = q.reshape((batch_size, seq_len, self.num_heads, self.head_dim))
             .map_err(|e| UnifiedError::Processing {
-                operation: "reshape q before norm".to_string(),
+                operation: "reshape q".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?;
-        
-        let q = self.q_norm.forward(&q).map_err(|e| UnifiedError::Model {
-            model_type: crate::core::ModelErrorType::Embedding,
-            operation: "forward q_norm".to_string(),
-            source: e.to_string(),
-            context: None,
-        })?;
-
         let k = k.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))
             .map_err(|e| UnifiedError::Processing {
-                operation: "reshape k before norm".to_string(),
+                operation: "reshape k".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?;
         
-        let k = self.k_norm.forward(&k).map_err(|e| UnifiedError::Model {
-            model_type: crate::core::ModelErrorType::Embedding,
-            operation: "forward k_norm".to_string(),
-            source: e.to_string(),
-            context: None,
-        })?;
-
-        // Transpose for attention computation
+        // 2. Transpose to (B, H, L, D)
         let q = q.transpose(1, 2)
             .map_err(|e| UnifiedError::Processing {
                 operation: "transpose q".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?;
-
         let k = k.transpose(1, 2)
             .map_err(|e| UnifiedError::Processing {
                 operation: "transpose k".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        
+        // 3. Flatten to (B*H*L, D) for per-head normalization
+        let q_flat = q.flatten(0, 2)
+            .map_err(|e| UnifiedError::Processing {
+                operation: "flatten q for norm".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        let k_flat = k.flatten(0, 2)
+            .map_err(|e| UnifiedError::Processing {
+                operation: "flatten k for norm".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        
+        // 4. Apply RMSNorm
+        let q_flat = self.q_norm.forward(&q_flat).map_err(|e| UnifiedError::Model {
+            model_type: crate::core::ModelErrorType::Embedding,
+            operation: "forward q_norm".to_string(),
+            source: e.to_string(),
+            context: None,
+        })?;
+        let k_flat = self.k_norm.forward(&k_flat).map_err(|e| UnifiedError::Model {
+            model_type: crate::core::ModelErrorType::Embedding,
+            operation: "forward k_norm".to_string(),
+            source: e.to_string(),
+            context: None,
+        })?;
+        
+        // 5. Reshape back to (B, H, L, D)
+        let q = q_flat.reshape((batch_size, self.num_heads, seq_len, self.head_dim))
+            .map_err(|e| UnifiedError::Processing {
+                operation: "reshape q after norm".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        let k = k_flat.reshape((batch_size, self.num_kv_heads, seq_len, self.head_dim))
+            .map_err(|e| UnifiedError::Processing {
+                operation: "reshape k after norm".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?;
@@ -1010,15 +1038,14 @@ impl Qwen3LoRAClassifier {
         let label_mapping_path = adapter_dir.join("label_mapping.json");
         let label_mapping = LabelMapping::from_file(&label_mapping_path)?;
 
-        // Determine dtype based on device (BF16 on CUDA, F32 on CPU)
-        // Training script now saves adapters in BF16 format for CUDA compatibility
+        // Use BF16 on CUDA for optimal performance
         let dtype = if device.is_cuda() { DType::BF16 } else { DType::F32 };
         println!("  Model dtype: {:?}", dtype);
 
         // Load base model weights
         let vb = Self::load_weights(base_dir, device, dtype)?;
 
-        // Load LoRA adapter config and weights
+        // Load LoRA adapter config and weights (same dtype as base for now)
         let (lora_adapter_info, lora_config, lora_vb) = Self::load_lora_adapter(adapter_dir, device, dtype)?;
 
         // Create model components
@@ -1397,7 +1424,7 @@ impl Qwen3LoRAClassifier {
 
         // Extract logits for category tokens
         let mut category_logits = Vec::new();
-        for &token_id in self.category_token_ids.iter() {
+        for (idx, &token_id) in self.category_token_ids.iter().enumerate() {
             let logit = last_logits
                 .i(token_id as usize)
                 .map_err(|e| UnifiedError::Processing {

@@ -282,7 +282,9 @@ def create_generative_dataset(
     - Training is 100x more focused: 100% signal vs 0.4% signal in old format!
     - Inference format matches training format exactly
     """
-    formatted_examples = []
+    input_ids_list = []
+    labels_list = []
+    attention_mask_list = []
 
     for text, label in zip(texts, labels):
         # Get messages (user instruction + assistant category)
@@ -294,23 +296,44 @@ def create_generative_dataset(
         formatted_text = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
         )
-        formatted_examples.append(formatted_text)
+        
+        # Tokenize the full conversation
+        full_encoding = tokenizer(
+            formatted_text,
+            truncation=True,
+            max_length=max_length,
+            padding="max_length",
+        )
+        
+        # Now tokenize just the user part (without assistant response) to find where to mask
+        user_messages = [messages[0]]  # Only user message
+        user_text = tokenizer.apply_chat_template(
+            user_messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        user_encoding = tokenizer(user_text, add_special_tokens=False)
+        
+        # Create labels: -100 for instruction, actual tokens for assistant response
+        labels = full_encoding["input_ids"].copy()
+        user_length = len(user_encoding["input_ids"])
+        
+        # Mask the instruction part (user message + prompt)
+        for i in range(min(user_length, len(labels))):
+            labels[i] = -100
+        
+        # Mask padding tokens
+        for i, token_id in enumerate(full_encoding["input_ids"]):
+            if token_id == tokenizer.pad_token_id:
+                labels[i] = -100
+        
+        input_ids_list.append(full_encoding["input_ids"])
+        labels_list.append(labels)
+        attention_mask_list.append(full_encoding["attention_mask"])
 
-    # Tokenize
-    encodings = tokenizer(
-        formatted_examples,
-        truncation=True,
-        padding="max_length",
-        max_length=max_length,
-        return_tensors="pt",
-    )
-
-    # For causal LM, labels = input_ids (shifted internally by model)
     return Dataset.from_dict(
         {
-            "input_ids": encodings["input_ids"],
-            "attention_mask": encodings["attention_mask"],
-            "labels": encodings["input_ids"],  # Standard causal LM format
+            "input_ids": input_ids_list,
+            "attention_mask": attention_mask_list,
+            "labels": labels_list,
         }
     )
 
@@ -500,7 +523,7 @@ def main(
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
         logging_steps=10,
-        eval_strategy="no",  # Disable evaluation during training to save memory
+        eval_strategy="no",  # Skip eval during training (saves 10+ minutes)
         save_strategy="no",  # Don't save intermediate checkpoints (saves disk space!)
         save_total_limit=1,  # Keep only 1 checkpoint
         warmup_ratio=0.1,

@@ -69,17 +69,15 @@ impl Qwen3CausalConfig {
                 context: Some(format!("Failed to read config from {:?}: {}", config_path, e)),
             })?;
         
-        let mut config: Self = serde_json::from_str(&config_str)
+        let config: Self = serde_json::from_str(&config_str)
             .map_err(|e| UnifiedError::Configuration {
                 operation: "config JSON parsing".to_string(),
                 source: ConfigErrorType::ParseError(e.to_string()),
                 context: Some(format!("Failed to parse config.json from {}", model_path)),
             })?;
         
-        // Calculate head_dim if not explicitly set
-        if config.head_dim == 128 && config.hidden_size != config.num_attention_heads * 128 {
-            config.head_dim = config.hidden_size / config.num_attention_heads;
-        }
+        // Trust the config file's head_dim value
+        // No need to recalculate - the config knows best!
         
         Ok(config)
     }
@@ -227,7 +225,7 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(dim: usize, max_seq_len: usize, theta: f32, device: &Device) -> UnifiedResult<Self> {
+    fn new(dim: usize, max_seq_len: usize, theta: f32, dtype: DType, device: &Device) -> UnifiedResult<Self> {
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
             .map(|i| 1.0 / theta.powf(i as f32 / dim as f32))
@@ -278,10 +276,18 @@ impl RotaryEmbedding {
             operation: "compute cos".to_string(),
             source: e.to_string(),
             input_context: None,
+        })?.to_dtype(dtype).map_err(|e| UnifiedError::Processing {
+            operation: "convert cos to dtype".to_string(),
+            source: e.to_string(),
+            input_context: None,
         })?;
 
         let sin = emb.sin().map_err(|e| UnifiedError::Processing {
             operation: "compute sin".to_string(),
+            source: e.to_string(),
+            input_context: None,
+        })?.to_dtype(dtype).map_err(|e| UnifiedError::Processing {
+            operation: "convert sin to dtype".to_string(),
             source: e.to_string(),
             input_context: None,
         })?;
@@ -377,7 +383,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(config: &Qwen3CausalConfig, vb: VarBuilder, device: &Device) -> UnifiedResult<Self> {
+    fn new(config: &Qwen3CausalConfig, vb: VarBuilder, device: &Device, dtype: DType) -> UnifiedResult<Self> {
         let hidden_size = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let num_kv_heads = config.num_key_value_heads;
@@ -437,6 +443,7 @@ impl Attention {
             head_dim,
             config.max_position_embeddings,
             config.rope_theta as f32,
+            dtype,
             device,
         )?;
 
@@ -491,21 +498,15 @@ impl Attention {
             }
         })?;
 
-        // Apply QK-normalization (Qwen3 specific)
+        // Apply QK-normalization (Qwen3 specific - normalize Q and K before RoPE)
+        // CRITICAL: Must match official Candle implementation order!
+        // 1. Reshape to (B, L, H, D)
         let q = q.reshape((batch_size, seq_len, self.num_heads, self.head_dim))
             .map_err(|e| UnifiedError::Processing {
                 operation: "reshape q".to_string(),
                 source: e.to_string(),
                 input_context: None,
             })?;
-        
-        let q = self.q_norm.forward(&q).map_err(|e| UnifiedError::Model {
-            model_type: crate::core::ModelErrorType::Embedding,
-            operation: "forward q_norm".to_string(),
-            source: e.to_string(),
-            context: None,
-        })?;
-
         let k = k.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))
             .map_err(|e| UnifiedError::Processing {
                 operation: "reshape k".to_string(),
@@ -513,25 +514,57 @@ impl Attention {
                 input_context: None,
             })?;
         
-        let k = self.k_norm.forward(&k).map_err(|e| UnifiedError::Model {
-            model_type: crate::core::ModelErrorType::Embedding,
-            operation: "forward k_norm".to_string(),
-            source: e.to_string(),
-            context: None,
-        })?;
-
-        // Transpose for attention computation
+        // 2. Transpose to (B, H, L, D)
         let q = q.transpose(1, 2).map_err(|e| UnifiedError::Processing {
             operation: "transpose q".to_string(),
             source: e.to_string(),
             input_context: None,
         })?;
-
         let k = k.transpose(1, 2).map_err(|e| UnifiedError::Processing {
             operation: "transpose k".to_string(),
             source: e.to_string(),
             input_context: None,
         })?;
+        
+        // 3. Flatten to (B*H*L, D) for per-head normalization
+        let q_flat = q.flatten(0, 2).map_err(|e| UnifiedError::Processing {
+            operation: "flatten q for norm".to_string(),
+            source: e.to_string(),
+            input_context: None,
+        })?;
+        let k_flat = k.flatten(0, 2).map_err(|e| UnifiedError::Processing {
+            operation: "flatten k for norm".to_string(),
+            source: e.to_string(),
+            input_context: None,
+        })?;
+        
+        // 4. Apply RMSNorm
+        let q_flat = self.q_norm.forward(&q_flat).map_err(|e| UnifiedError::Model {
+            model_type: crate::core::ModelErrorType::Embedding,
+            operation: "forward q_norm".to_string(),
+            source: e.to_string(),
+            context: None,
+        })?;
+        let k_flat = self.k_norm.forward(&k_flat).map_err(|e| UnifiedError::Model {
+            model_type: crate::core::ModelErrorType::Embedding,
+            operation: "forward k_norm".to_string(),
+            source: e.to_string(),
+            context: None,
+        })?;
+        
+        // 5. Reshape back to (B, H, L, D)
+        let q = q_flat.reshape((batch_size, self.num_heads, seq_len, self.head_dim))
+            .map_err(|e| UnifiedError::Processing {
+                operation: "reshape q after norm".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
+        let k = k_flat.reshape((batch_size, self.num_kv_heads, seq_len, self.head_dim))
+            .map_err(|e| UnifiedError::Processing {
+                operation: "reshape k after norm".to_string(),
+                source: e.to_string(),
+                input_context: None,
+            })?;
 
         let v = v.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))
             .map_err(|e| UnifiedError::Processing {
@@ -752,8 +785,8 @@ struct Qwen3DecoderLayer {
 }
 
 impl Qwen3DecoderLayer {
-    fn new(config: &Qwen3CausalConfig, vb: VarBuilder, device: &Device) -> UnifiedResult<Self> {
-        let self_attn = Attention::new(config, vb.pp("self_attn"), device)?;
+    fn new(config: &Qwen3CausalConfig, vb: VarBuilder, device: &Device, dtype: DType) -> UnifiedResult<Self> {
+        let self_attn = Attention::new(config, vb.pp("self_attn"), device, dtype)?;
         let mlp = MLP::new(config, vb.pp("mlp"))?;
 
         let input_ln_weight = vb
@@ -1048,7 +1081,7 @@ impl Qwen3CausalLM {
             if layer_idx % 5 == 0 {
                 println!("  Loading layer {}/{}", layer_idx + 1, config.num_hidden_layers);
             }
-            let layer = Qwen3DecoderLayer::new(&config, layers_vb.pp(&layer_idx.to_string()), device)?;
+            let layer = Qwen3DecoderLayer::new(&config, layers_vb.pp(&layer_idx.to_string()), device, dtype)?;
             layers.push(layer);
         }
         println!("✅ All {} transformer layers loaded", config.num_hidden_layers);

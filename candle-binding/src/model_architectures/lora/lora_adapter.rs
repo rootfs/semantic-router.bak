@@ -3,7 +3,7 @@
 //! This module provides the core LoRA (Low-Rank Adaptation) adapter implementation
 //! for parameter-efficient fine-tuning of transformer models.
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Dropout, Linear, Module, VarBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -81,32 +81,13 @@ impl LoRAAdapter {
         device: &Device,
     ) -> Result<Self> {
         // Create LoRA A matrix (rank x input_dim)
-        // IMPORTANT: Try to load from VarBuilder FIRST, fall back to initialization only if not found
+        // CRITICAL: Must load from pretrained weights, NOT initialize!
         let lora_a = {
             let weight = vb.get((config.rank, input_dim), "lora_A.weight")
-                .or_else(|_| {
-                    // Fallback to initialization only if weight not found
-                    match config.init_method {
-                        LoRAInitMethod::Kaiming => {
-                            vb.get_with_hints(
-                                (config.rank, input_dim),
-                                "lora_A.weight",
-                                candle_nn::init::DEFAULT_KAIMING_NORMAL,
-                            )
-                        }
-                        LoRAInitMethod::Xavier => {
-                            let fan_in = input_dim as f64;
-                            let fan_out = config.rank as f64;
-                            let std = (2.0 / (fan_in + fan_out)).sqrt();
-                            Tensor::randn(0.0f32, std as f32, (config.rank, input_dim), device)
-                        }
-                        LoRAInitMethod::Normal { mean, std } => {
-                            Tensor::randn(mean as f32, std as f32, (config.rank, input_dim), device)
-                        }
-                        LoRAInitMethod::Zero => {
-                            Tensor::zeros((config.rank, input_dim), DType::F32, device)
-                        }
-                    }
+                .map_err(|e| {
+                    eprintln!("❌ FATAL: Failed to load lora_A.weight: {}", e);
+                    eprintln!("   This means LoRA weights are not being loaded - inference will be incorrect!");
+                    e
                 })?;
 
             let bias = if config.use_bias {
@@ -118,10 +99,13 @@ impl LoRAAdapter {
             Linear::new(weight, bias)
         };
 
-        // Create LoRA B matrix (output_dim x rank) - Try to load FIRST, then fall back to zero
+        // Create LoRA B matrix (output_dim x rank) - Must load from pretrained weights
         let lora_b = {
             let weight = vb.get((output_dim, config.rank), "lora_B.weight")
-                .or_else(|_| Tensor::zeros((output_dim, config.rank), DType::F32, device))?;
+                .map_err(|e| {
+                    eprintln!("❌ FATAL: Failed to load lora_B.weight: {}", e);
+                    e
+                })?;
 
             let bias = if config.use_bias {
                 Some(vb.get(output_dim, "lora_B.bias")?)

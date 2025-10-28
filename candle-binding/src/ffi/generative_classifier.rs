@@ -2,7 +2,7 @@
 //!
 //! Exposes the Qwen3 + LoRA classifier to Go via C ABI.
 
-use crate::model_architectures::generative::{Qwen3LoRAClassifier, softmax};
+use crate::model_architectures::generative::Qwen3LoRAClassifier;
 use candle_core::Device;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -139,10 +139,8 @@ pub extern "C" fn classify_text_qwen3_lora(
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error: invalid UTF-8 in text: {}", e);
-                unsafe {
-                    (*result) = GenerativeClassificationResult::default();
-                    (*result).error_message = create_error_message(&format!("Invalid UTF-8: {}", e));
-                }
+                (*result) = GenerativeClassificationResult::default();
+                (*result).error_message = create_error_message(&format!("Invalid UTF-8: {}", e));
                 return -1;
             }
         }
