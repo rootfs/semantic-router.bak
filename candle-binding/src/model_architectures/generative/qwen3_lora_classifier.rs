@@ -72,21 +72,15 @@ impl RotaryEmbedding {
             input_context: None,
         })?;
 
-        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1).map_err(|e| {
-            UnifiedError::Processing {
-                operation: "concat freqs".to_string(),
-                source: e.to_string(),
-                input_context: None,
-            }
-        })?;
-
-        let cos = emb.cos().map_err(|e| UnifiedError::Processing {
+        // FIXED: Don't concatenate freqs - official rope expects [seq_len, head_dim/2]
+        // The official candle_nn::rotary_emb::rope will handle the full rotation internally
+        let cos = freqs.cos().map_err(|e| UnifiedError::Processing {
             operation: "compute cos".to_string(),
             source: e.to_string(),
             input_context: None,
         })?;
 
-        let sin = emb.sin().map_err(|e| UnifiedError::Processing {
+        let sin = freqs.sin().map_err(|e| UnifiedError::Processing {
             operation: "compute sin".to_string(),
             source: e.to_string(),
             input_context: None,
@@ -1271,8 +1265,10 @@ impl Qwen3LoRAClassifier {
         };
 
         // ChatML format with add_generation_prompt=True
+        // Note: Qwen3 tokenizer adds <think> tags even with enable_thinking=False
+        // We must match this to extract logits from the correct position
         format!(
-            "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
             instruction
         )
     }
@@ -1657,6 +1653,11 @@ impl Qwen3LoRAClassifier {
     /// Get number of categories
     pub fn num_categories(&self) -> usize {
         self.label_mapping.id2label.len()
+    }
+    
+    /// Get the tokenizer
+    pub fn tokenizer(&self) -> &tokenizers::Tokenizer {
+        &self.tokenizer
     }
 }
 

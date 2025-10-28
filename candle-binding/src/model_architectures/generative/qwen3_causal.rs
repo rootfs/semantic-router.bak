@@ -267,15 +267,9 @@ impl RotaryEmbedding {
             input_context: None,
         })?;
 
-        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1).map_err(|e| {
-            UnifiedError::Processing {
-                operation: "concat freqs".to_string(),
-                source: e.to_string(),
-                input_context: None,
-            }
-        })?;
-
-        let cos = emb.cos().map_err(|e| UnifiedError::Processing {
+        // FIXED: Don't concatenate freqs - official rope expects [seq_len, head_dim/2]
+        // The official candle_nn::rotary_emb::rope will handle the full rotation internally
+        let cos = freqs.cos().map_err(|e| UnifiedError::Processing {
             operation: "compute cos".to_string(),
             source: e.to_string(),
             input_context: None,
@@ -285,7 +279,7 @@ impl RotaryEmbedding {
             input_context: None,
         })?;
 
-        let sin = emb.sin().map_err(|e| UnifiedError::Processing {
+        let sin = freqs.sin().map_err(|e| UnifiedError::Processing {
             operation: "compute sin".to_string(),
             source: e.to_string(),
             input_context: None,
