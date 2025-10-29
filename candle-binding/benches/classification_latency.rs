@@ -7,12 +7,21 @@ use candle_semantic_router::model_architectures::generative::qwen3_causal::Qwen3
 
 // Note: This benchmark requires a trained model to run
 // Set MODEL_PATH environment variable to your model directory
+// Set DEVICE=cpu to force CPU, or DEVICE=gpu to force GPU (default: auto)
+
+fn get_device() -> Device {
+    match std::env::var("DEVICE").as_deref() {
+        Ok("cpu") | Ok("CPU") => Device::Cpu,
+        Ok("gpu") | Ok("GPU") => Device::cuda_if_available(0).expect("GPU requested but not available"),
+        _ => Device::cuda_if_available(0).unwrap_or(Device::Cpu),
+    }
+}
 
 fn benchmark_single_classification(c: &mut Criterion) {
     let model_path = std::env::var("MODEL_PATH")
         .unwrap_or_else(|_| "./models/qwen3_generative_classifier_r16".to_string());
     
-    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    let device = get_device();
     
     // Try to load model
     let model = match Qwen3CausalLM::from_pretrained(&model_path, &device) {
@@ -37,7 +46,7 @@ fn benchmark_batch_classification(c: &mut Criterion) {
     let model_path = std::env::var("MODEL_PATH")
         .unwrap_or_else(|_| "./models/qwen3_generative_classifier_r16".to_string());
     
-    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    let device = get_device();
     
     let model = match Qwen3CausalLM::from_pretrained(&model_path, &device) {
         Ok(m) => m,

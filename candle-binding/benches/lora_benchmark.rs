@@ -14,7 +14,7 @@ struct TestSample {
 }
 
 fn load_test_data() -> Vec<TestSample> {
-    let data_path = "../bench/test_data.json";
+    let data_path = "/home/ubuntu/rootfs/back/semantic-router.bak/bench/results/json/test_data.json";
     let contents = fs::read_to_string(data_path)
         .expect("Failed to read test_data.json");
     serde_json::from_str(&contents).expect("Failed to parse test_data.json")
