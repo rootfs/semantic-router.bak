@@ -110,38 +110,86 @@ func generateTestQueries(count int, diversity float64) []string {
 	return queries
 }
 
-// populateCache pre-fills the cache with entries
+// populateCache pre-fills the cache with entries using concurrent requests
+// to leverage continuous batching for faster population
 func populateCache(cache *InMemoryCache, size int) error {
 	queries := generateTestQueries(size, 0.9) // High diversity for initial population
 	
-	for i := 0; i < size; i++ {
-		requestID := fmt.Sprintf("req-%d", i)
-		query := queries[i]
-		responseBody := []byte(fmt.Sprintf("Response for: %s", query))
-		
-		err := cache.AddEntry(requestID, "test-model", query, []byte(query), responseBody)
-		if err != nil {
-			return fmt.Errorf("failed to add entry %d: %w", i, err)
-		}
-		
-		// Progress indicator for large cache sizes
-		if (i+1)%1000 == 0 {
-			fmt.Printf("  Populated %d/%d entries\n", i+1, size)
-		}
+	// Use high concurrency for population to maximize continuous batching
+	populateConcurrency := 64
+	if size < 64 {
+		populateConcurrency = size
 	}
+	
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, populateConcurrency)
+	errors := make(chan error, size)
+	
+	// Atomic counter for progress tracking
+	var completed int64
+	
+	startPopulate := time.Now()
+	
+	for i := 0; i < size; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			
+			requestID := fmt.Sprintf("req-%d", idx)
+			query := queries[idx]
+			responseBody := []byte(fmt.Sprintf("Response for: %s", query))
+			
+			err := cache.AddEntry(requestID, "test-model", query, []byte(query), responseBody)
+			if err != nil {
+				errors <- fmt.Errorf("failed to add entry %d: %w", idx, err)
+				return
+			}
+			
+			// Increment and check progress (non-blocking)
+			count := atomic.AddInt64(&completed, 1)
+			if count%1000 == 0 {
+				fmt.Printf("  Populated %d/%d entries\n", count, size)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	close(errors)
+	
+	populateDuration := time.Since(startPopulate)
+	
+	// Check for any errors
+	if len(errors) > 0 {
+		return <-errors
+	}
+	
+	throughput := float64(size) / populateDuration.Seconds()
+	fmt.Printf("  ✓ Population complete: %d entries in %v (%.0f entries/sec)\n", 
+		size, populateDuration.Round(time.Millisecond), throughput)
 	
 	return nil
 }
 
+// cosineSimilarity computes cosine similarity using SIMD-optimized dot product
+// Embeddings are normalized, so dot product = cosine similarity
+func cosineSimilarity(a, b []float32) float32 {
+	return dotProductSIMD(a, b)
+}
+
 // measureSearchLatency performs a search and measures component latencies
+// IMPORTANT: Separates embedding generation time from pure search time
 func measureSearchLatency(cache *InMemoryCache, model, query string) latencyMeasurement {
 	measurement := latencyMeasurement{}
 	
 	startTotal := time.Now()
 	
-	// Measure embedding generation time
+	// Measure embedding generation time ONCE
 	startEmbed := time.Now()
-	_, err := cache.generateEmbedding(query)
+	queryEmbedding, err := cache.generateEmbedding(query)
 	measurement.EmbeddingTime = time.Since(startEmbed)
 	
 	if err != nil {
@@ -150,12 +198,43 @@ func measureSearchLatency(cache *InMemoryCache, model, query string) latencyMeas
 		return measurement
 	}
 	
-	// Measure search time (including embedding generation inside FindSimilar)
+	// Measure PURE search time (no embedding generation)
+	// Use the pre-computed embedding to avoid double-counting
 	startSearch := time.Now()
-	_, hit, err := cache.FindSimilar(model, query)
+	
+	cache.mu.RLock()
+	var bestMatch *CacheEntry
+	var bestSimilarity float32 = -1
+	
+	// Perform similarity search using HNSW or linear
+	if cache.hnswIndex != nil {
+		// HNSW search
+		candidates := cache.hnswIndex.searchKNN(queryEmbedding, 1, 50, cache.entries)
+		for _, idx := range candidates {
+			if idx >= 0 && idx < len(cache.entries) {
+				entry := &cache.entries[idx]
+				similarity := cosineSimilarity(queryEmbedding, entry.Embedding)
+				if similarity > bestSimilarity && similarity >= cache.similarityThreshold {
+					bestSimilarity = similarity
+					bestMatch = entry
+				}
+			}
+		}
+	} else {
+		// Linear search
+		for i := range cache.entries {
+			entry := &cache.entries[i]
+			similarity := cosineSimilarity(queryEmbedding, entry.Embedding)
+			if similarity > bestSimilarity && similarity >= cache.similarityThreshold {
+				bestSimilarity = similarity
+				bestMatch = entry
+			}
+		}
+	}
+	cache.mu.RUnlock()
+	
 	measurement.SearchTime = time.Since(startSearch)
-	measurement.CacheHit = hit
-	measurement.Error = err
+	measurement.CacheHit = bestMatch != nil
 	
 	measurement.TotalTime = time.Since(startTotal)
 	return measurement
