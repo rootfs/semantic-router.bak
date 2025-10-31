@@ -137,8 +137,16 @@ func (c *InMemoryCache) generateEmbedding(text string) ([]float32, error) {
 	modelName := strings.ToLower(strings.TrimSpace(c.embeddingModel))
 
 	switch modelName {
-	case "qwen3", "gemma":
-		// Use GetEmbeddingWithModelType for Qwen3 or Gemma
+	case "qwen3":
+		// Use GetEmbeddingBatched for Qwen3 with TRUE continuous batching
+		// Now properly fixed to avoid CUDA context issues!
+		output, err := candle_binding.GetEmbeddingBatched(text, modelName, 0)
+		if err != nil {
+			return nil, err
+		}
+		return output.Embedding, nil
+	case "gemma":
+		// Use GetEmbeddingWithModelType for Gemma (standard version)
 		output, err := candle_binding.GetEmbeddingWithModelType(text, modelName, 0)
 		if err != nil {
 			return nil, err

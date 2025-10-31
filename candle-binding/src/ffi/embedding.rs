@@ -1422,18 +1422,18 @@ pub extern "C" fn free_embedding_models_info(
 use crate::model_architectures::embedding::continuous_batch_scheduler::ContinuousBatchConfig;
 use crate::model_architectures::embedding::qwen3_batched::Qwen3EmbeddingModelBatched;
 use crate::model_architectures::embedding::qwen3_embedding::Qwen3EmbeddingModel;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
 /// Batched model with tokenizer and device info
 struct BatchedModelContext {
-    model: Qwen3EmbeddingModelBatched,
-    tokenizer: Tokenizer,
+    model: Arc<Qwen3EmbeddingModelBatched>,
+    tokenizer: Arc<Mutex<Tokenizer>>,  // Tokenizer needs mutex (not thread-safe)
     device: candle_core::Device,
 }
 
 /// Global singleton for batched model
-static GLOBAL_BATCHED_MODEL: OnceLock<Mutex<BatchedModelContext>> = OnceLock::new();
+static GLOBAL_BATCHED_MODEL: OnceLock<BatchedModelContext> = OnceLock::new();
 
 /// Initialize Qwen3 embedding model with continuous batching
 ///
@@ -1532,15 +1532,15 @@ pub extern "C" fn init_embedding_models_batched(
     );
     let batched_model = Qwen3EmbeddingModelBatched::from_model(base_model, batch_config);
 
-    // Create context with tokenizer
+    // Create context with tokenizer (wrap in Arc for concurrent access)
     let context = BatchedModelContext {
-        model: batched_model,
-        tokenizer,
+        model: Arc::new(batched_model),
+        tokenizer: Arc::new(Mutex::new(tokenizer)),
         device: device.clone(),
     };
 
-    // Store in global singleton
-    if GLOBAL_BATCHED_MODEL.set(Mutex::new(context)).is_err() {
+    // Store in global singleton (no outer Mutex needed - Arc handles concurrency)
+    if GLOBAL_BATCHED_MODEL.set(context).is_err() {
         eprintln!("ERROR: Failed to set global batched model");
         return false;
     }
@@ -1609,7 +1609,7 @@ pub extern "C" fn get_embedding_batched(
         return -1;
     }
 
-    // Get batched model context
+    // Get batched model context (OnceLock - no lock needed!)
     let batched_context = match GLOBAL_BATCHED_MODEL.get() {
         Some(ctx) => ctx,
         None => {
@@ -1623,88 +1623,50 @@ pub extern "C" fn get_embedding_batched(
 
     let start_time = std::time::Instant::now();
 
-    // Lock the context
-    let context_guard = match batched_context.lock() {
-        Ok(guard) => guard,
-        Err(e) => {
-            eprintln!("Error: failed to lock batched context: {}", e);
-            unsafe {
-                (*result) = create_error_result();
-            }
-            return -1;
-        }
-    };
+    // Clone Arc references for concurrent access
+    let tokenizer = Arc::clone(&batched_context.tokenizer);
+    let model = Arc::clone(&batched_context.model);
 
-    // Tokenize
-    let encodings = match context_guard
-        .tokenizer
-        .encode_batch(vec![text_str.to_string()], true)
-    {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Error: tokenization failed: {}", e);
-            unsafe {
-                (*result) = create_error_result();
-            }
-            return -1;
-        }
-    };
-
-    let ids: Vec<u32> = encodings[0].get_ids().to_vec();
-    let mask: Vec<u32> = encodings[0].get_attention_mask().to_vec();
-
-    // Create tensors
-    let input_ids = match candle_core::Tensor::new(vec![ids], &context_guard.device) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error: failed to create input_ids tensor: {:?}", e);
-            unsafe {
-                (*result) = create_error_result();
-            }
-            return -1;
-        }
-    };
-
-    let attention_mask = match candle_core::Tensor::new(vec![mask], &context_guard.device) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error: failed to create attention_mask tensor: {:?}", e);
-            unsafe {
-                (*result) = create_error_result();
-            }
-            return -1;
-        }
-    };
-
-    // Generate embedding using continuous batching
-    let embedding_tensor = match context_guard
-        .model
-        .embedding_forward(&input_ids, &attention_mask)
-    {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error: embedding generation failed: {:?}", e);
-            unsafe {
-                (*result) = create_error_result();
-            }
-            return -1;
-        }
-    };
-
-    // Extract embedding data
-    let embedding_vec = match embedding_tensor.squeeze(0) {
-        Ok(t) => match t.to_vec1::<f32>() {
-            Ok(v) => v,
+    // Tokenize (brief lock on tokenizer only)
+    let (ids_raw, mask_raw, seq_len) = {
+        let tokenizer_guard = match tokenizer.lock() {
+            Ok(guard) => guard,
             Err(e) => {
-                eprintln!("Error: failed to convert tensor to vec: {:?}", e);
+                eprintln!("Error: failed to lock tokenizer: {}", e);
                 unsafe {
                     (*result) = create_error_result();
                 }
                 return -1;
             }
-        },
+        };
+
+        // Tokenize
+        let encodings = match tokenizer_guard.encode_batch(vec![text_str.to_string()], true) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Error: tokenization failed: {}", e);
+                unsafe {
+                    (*result) = create_error_result();
+                }
+                return -1;
+            }
+        };
+
+        let ids: Vec<u32> = encodings[0].get_ids().to_vec();
+        let mask: Vec<u32> = encodings[0].get_attention_mask().to_vec();
+        let seq_len = encodings[0].len();
+        
+        // Tokenizer lock released here - can now process concurrently!
+        (ids, mask, seq_len)
+    };
+
+    // Generate embedding using continuous batching
+    // NO LOCK HELD - multiple requests execute concurrently!
+    // Model is Arc-wrapped and internally thread-safe via channels
+    let embedding_vec = match model.embedding_forward_from_raw(ids_raw, mask_raw) {
+        Ok(vec) => vec,
         Err(e) => {
-            eprintln!("Error: failed to squeeze tensor: {:?}", e);
+            eprintln!("Error: embedding generation failed: {:?}", e);
             unsafe {
                 (*result) = create_error_result();
             }
@@ -1729,7 +1691,7 @@ pub extern "C" fn get_embedding_batched(
             length,
             error: false,
             model_type: 0, // Qwen3
-            sequence_length: encodings[0].len() as i32,
+            sequence_length: seq_len as i32,
             processing_time_ms,
         };
     }
