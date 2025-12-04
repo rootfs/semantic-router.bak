@@ -571,6 +571,11 @@ type ModelParams struct {
 	// LoRA adapters available for this model
 	// These must be registered with vLLM using --lora-modules flag
 	LoRAs []LoRAAdapter `yaml:"loras,omitempty"`
+
+	// VLLMModelID is the model name to use when sending requests to vLLM
+	// If empty, the router's model name is used as-is
+	// Example: router uses "math" internally but vLLM expects "Qwen/Qwen2.5-Math-7B-Instruct"
+	VLLMModelID string `yaml:"vllm_model_id,omitempty"`
 }
 
 // LoRAAdapter represents a LoRA adapter configuration for a model

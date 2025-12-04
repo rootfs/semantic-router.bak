@@ -45,44 +45,39 @@ def get_oracle_model(question: Dict) -> str:
             return m
     return correct_models[0]
 
-def query_router(question_text: str) -> Tuple[str, float]:
-    """Query the router and get the selected model."""
+def query_router(question_text: str) -> Tuple[str, str, float]:
+    """Query the router and get the selected model and answer."""
     try:
         response = requests.post(
             ROUTER_URL,
             json={
                 "model": "auto",
                 "messages": [{"role": "user", "content": question_text}],
-                "max_tokens": 10  # We don't need actual response, just routing
+                "max_tokens": 512
             },
-            timeout=30
+            timeout=60
         )
         
-        # Even if vLLM backend fails, check response headers for routing info
-        # The model might be in the error message
         if response.status_code == 200:
             result = response.json()
-            # Model should be in the response
-            model = result.get('model', 'unknown')
-            return model, 1.0
+            # Map vLLM model ID back to router model name
+            vllm_model = result.get('model', 'unknown')
+            model_map = {
+                'Qwen/Qwen2.5-Math-7B-Instruct': 'math',
+                'Qwen/Qwen2.5-Coder-7B-Instruct': 'coder',
+                'Qwen/Qwen2.5-14B-Instruct-AWQ': 'general'
+            }
+            model = model_map.get(vllm_model, vllm_model)
+            
+            # Extract the response content
+            content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+            return model, content, 1.0
         else:
-            # Check if we got a model error (means routing worked)
-            try:
-                error = response.json()
-                error_msg = error.get('error', {}).get('message', '')
-                if 'model' in error_msg.lower():
-                    # Extract model name from "The model `X` does not exist"
-                    import re
-                    match = re.search(r'model `(\w+)`', error_msg)
-                    if match:
-                        return match.group(1), 1.0
-            except:
-                pass
-            return 'unknown', 0.0
+            return 'unknown', '', 0.0
             
     except Exception as e:
         print(f"Error querying router: {e}")
-        return 'error', 0.0
+        return 'error', '', 0.0
 
 def main():
     print("=" * 60)
@@ -118,7 +113,7 @@ def main():
             print(f"Processing {i}/{num_test}...")
         
         oracle = get_oracle_model(q)
-        router_model, _ = query_router(q['question'])
+        router_model, response_content, _ = query_router(q['question'])
         
         category = q.get('category', 'unknown')
         if category not in category_results:

@@ -234,8 +234,13 @@ func (r *OpenAIRouter) selectEndpointForModel(ctx *RequestContext, model string)
 
 // modifyRequestBodyForAutoRouting modifies the request body for auto routing
 func (r *OpenAIRouter) modifyRequestBodyForAutoRouting(openAIRequest *openai.ChatCompletionNewParams, matchedModel string, decisionName string, useReasoning bool, ctx *RequestContext) ([]byte, error) {
-	// Modify the model in the request
-	openAIRequest.Model = matchedModel
+	// Modify the model in the request - use VLLMModelID if configured
+	modelToUse := matchedModel
+	if modelConfig, ok := r.Config.ModelConfig[matchedModel]; ok && modelConfig.VLLMModelID != "" {
+		modelToUse = modelConfig.VLLMModelID
+		logging.Debugf("Translating model name: %s -> %s (vllm_model_id)", matchedModel, modelToUse)
+	}
+	openAIRequest.Model = modelToUse
 
 	// Serialize the modified request
 	modifiedBody, err := serializeOpenAIRequestWithStream(openAIRequest, ctx.ExpectStreamingResponse)

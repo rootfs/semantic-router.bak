@@ -6,10 +6,10 @@ bert_model:
   threshold: 0.6
   use_cpu: true
 
-# Embedding models for cluster router
+# Embedding models for cluster router (GPU 3)
 embedding_models:
   qwen3_model_path: "models/Qwen3-Embedding-0.6B"
-  use_cpu: true
+  use_cpu: false
 
 semantic_cache:
   enabled: false  # Disabled for testing cluster routing
@@ -36,17 +36,20 @@ vllm_endpoints:
     port: 8083
     weight: 1
 
-# Model configuration - map model names to endpoints
+# Model configuration - map model names to endpoints and vLLM model IDs
 model_config:
   "math":
     reasoning_family: "qwen3"
     preferred_endpoints: ["math"]
+    vllm_model_id: "Qwen/Qwen2.5-Math-7B-Instruct"
   "coder":
     reasoning_family: "qwen3"
     preferred_endpoints: ["coder"]
+    vllm_model_id: "Qwen/Qwen2.5-Coder-7B-Instruct"
   "general":
     reasoning_family: "qwen3"
     preferred_endpoints: ["general"]
+    vllm_model_id: "Qwen/Qwen2.5-14B-Instruct-AWQ"
 
 # Default model for fallback
 default_model: "coder"
@@ -88,8 +91,8 @@ cluster_router:
   # Higher beta = more focused on nearest cluster
   beta: 9.0
   
-  # Use CPU for tensor operations
-  use_cpu: true
+  # Use GPU for tensor operations (GPU 3)
+  use_cpu: false
   
   # Model costs for cost-aware routing (based on model size)
   model_costs:
