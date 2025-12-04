@@ -98,12 +98,12 @@ cluster_router:
     general: 14.0  # 14B parameter model
   
   # Experience database path (JSON format)
-  # This file contains query embeddings and model performance scores
-  experience_db_path: "tutorial/cluster_router/mmlu_pro_experience_db.json"
+  # Embeddings generated with qwen3 model for consistency with routing
+  experience_db_path: "tutorial/cluster_router/mmlu_pro_experience_db_qwen3.json"
   
-  # Embedding model for query embedding
+  # Embedding model for query embedding at routing time
   embedding_model: "qwen3"
-  embedding_dim: 768
+  embedding_dim: 1024  # qwen3 native dimension
 
 # Minimal categories for testing
 categories:
