@@ -458,6 +458,19 @@ type ClusterRouterConfig struct {
 	// Default: 1.0 (performance only)
 	Alpha float32 `yaml:"alpha,omitempty"`
 
+	// Number of top clusters to consider for routing (top-k aggregation)
+	// Higher values provide smoother routing for queries between clusters
+	// Recommended: 1-5 (1 = single cluster, 3 = good balance)
+	// Default: 3
+	TopK int `yaml:"top_k,omitempty"`
+
+	// Temperature parameter for softmax cluster weighting (beta)
+	// Higher beta = more focused on nearest cluster
+	// Lower beta = more uniform weighting across top-k clusters
+	// Recommended: 5.0-15.0
+	// Default: 9.0
+	Beta float32 `yaml:"beta,omitempty"`
+
 	// Whether to use CPU for clustering (true) or GPU (false)
 	// GPU is faster for large experience databases
 	// Default: false (use GPU if available)
@@ -491,6 +504,8 @@ func DefaultClusterRouterConfig() ClusterRouterConfig {
 		NClusters:      10,
 		MaxIterations:  100,
 		Alpha:          1.0, // Performance only by default
+		TopK:           3,   // Consider top 3 clusters
+		Beta:           9.0, // Softmax temperature
 		UseCPU:         false,
 		EmbeddingModel: "qwen3",
 		EmbeddingDim:   768,

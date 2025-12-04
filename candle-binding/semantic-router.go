@@ -280,6 +280,8 @@ typedef struct {
     int max_iterations;   // Maximum iterations for K-means convergence
     float alpha;          // Cost-performance balance (0.0 = cost only, 1.0 = performance only)
     bool use_cpu;         // Whether to use CPU (true) or GPU (false)
+    int top_k;            // Number of top clusters to consider (top-k aggregation)
+    float beta;           // Temperature parameter for softmax cluster weighting
 } ClusterRouterConfig;
 
 // Experience record for training (single query)
@@ -2616,6 +2618,12 @@ type ClusterRouterConfig struct {
 	Alpha float32
 	// Whether to use CPU (true) or GPU (false)
 	UseCPU bool
+	// Number of top clusters to consider for routing (top-k aggregation)
+	// Higher values provide smoother routing for queries between clusters
+	TopK int
+	// Temperature parameter for softmax cluster weighting (beta)
+	// Higher beta = more focused on nearest cluster
+	Beta float32
 }
 
 // DefaultClusterRouterConfig returns default configuration
@@ -2625,6 +2633,8 @@ func DefaultClusterRouterConfig() ClusterRouterConfig {
 		MaxIterations: 100,
 		Alpha:         1.0, // Performance only by default
 		UseCPU:        false,
+		TopK:          3,   // Consider top 3 clusters
+		Beta:          9.0, // Softmax temperature
 	}
 }
 
@@ -2697,12 +2707,23 @@ func InitClusterRouter(experienceData []ExperienceRecord, modelCosts map[string]
 		return fmt.Errorf("experience data cannot be empty")
 	}
 
-	// Prepare C config
+	// Prepare C config with defaults for unset values
+	topK := config.TopK
+	if topK <= 0 {
+		topK = 3 // Default
+	}
+	beta := config.Beta
+	if beta <= 0 {
+		beta = 9.0 // Default
+	}
+
 	cConfig := C.ClusterRouterConfig{
 		n_clusters:     C.int(config.NClusters),
 		max_iterations: C.int(config.MaxIterations),
 		alpha:          C.float(config.Alpha),
 		use_cpu:        C.bool(config.UseCPU),
+		top_k:          C.int(topK),
+		beta:           C.float(beta),
 	}
 
 	// Prepare experience records

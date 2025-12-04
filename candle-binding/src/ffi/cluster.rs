@@ -31,6 +31,8 @@ pub struct ClusterRouterState {
     pub cluster_best_model: Vec<String>,
     /// Model performance scores per cluster (cluster_id -> model_name -> avg_score)
     pub cluster_model_scores: Vec<HashMap<String, f32>>,
+    /// Model rankings per cluster (cluster_id -> sorted model names by score desc)
+    pub cluster_model_rankings: Vec<Vec<String>>,
     /// Model cost factors for cost-aware routing (model_name -> relative_cost)
     pub model_costs: HashMap<String, f32>,
     /// List of available model names
@@ -39,6 +41,12 @@ pub struct ClusterRouterState {
     pub embedding_dim: usize,
     /// Number of clusters
     pub n_clusters: usize,
+    /// Number of top clusters to consider (top-k)
+    pub top_k: usize,
+    /// Temperature for softmax (beta)
+    pub beta: f32,
+    /// Alpha for cost-performance balance
+    pub alpha: f32,
     /// Device for tensor operations
     device: Device,
 }
@@ -78,6 +86,10 @@ pub struct ClusterRouterConfig {
     pub alpha: f32,
     /// Whether to use CPU (true) or GPU (false)
     pub use_cpu: bool,
+    /// Number of top clusters to consider for routing (top-k aggregation)
+    pub top_k: i32,
+    /// Temperature parameter for cluster probability (higher = more focused on nearest)
+    pub beta: f32,
 }
 
 impl Default for ClusterRouterConfig {
@@ -85,8 +97,10 @@ impl Default for ClusterRouterConfig {
         Self {
             n_clusters: 10,
             max_iterations: 100,
-            alpha: 1.0, // Default: performance only
+            alpha: 1.0,  // Default: performance only
             use_cpu: false,
+            top_k: 3,    // Consider top 3 clusters
+            beta: 9.0,   // Softmax temperature (higher = more focused)
         }
     }
 }
@@ -189,31 +203,118 @@ fn kmeans_fit(
     Ok((centers, cluster_assignments))
 }
 
-/// Compute cosine similarity between query and cluster centers
-fn find_nearest_cluster(
+/// Compute distances from query to all cluster centers
+/// Returns (sorted_cluster_indices, sorted_distances) where distances are 1 - cosine_similarity
+fn compute_cluster_distances(
     query_embedding: &Tensor,
     cluster_centers: &Tensor,
-) -> Result<(usize, f32), candle_core::Error> {
+) -> Result<(Vec<usize>, Vec<f32>), candle_core::Error> {
     // Normalize query
     let query_norm = query_embedding.sqr()?.sum_all()?.sqrt()?;
-    let query_normalized = query_embedding.broadcast_div(&query_norm)?;
+    let eps = Tensor::full(1e-8f32, query_norm.shape(), query_norm.device())?;
+    let safe_query_norm = query_norm.maximum(&eps)?;
+    let query_normalized = query_embedding.broadcast_div(&safe_query_norm)?;
 
-    // Normalize centers
+    // Normalize centers (they should already be normalized, but be safe)
     let centers_norm = cluster_centers.sqr()?.sum(1)?.sqrt()?.unsqueeze(1)?;
-    let centers_normalized = cluster_centers.broadcast_div(&centers_norm)?;
+    let eps_centers = Tensor::full(1e-8f32, centers_norm.shape(), centers_norm.device())?;
+    let safe_centers_norm = centers_norm.maximum(&eps_centers)?;
+    let centers_normalized = cluster_centers.broadcast_div(&safe_centers_norm)?;
 
     // Compute cosine similarity: query @ centers.T
     let similarities = query_normalized.matmul(&centers_normalized.t()?)?;
     let similarities_1d = similarities.squeeze(0)?;
 
-    // Find max similarity
-    let max_idx = similarities_1d.argmax(0)?;
-    let max_sim = similarities_1d.max(0)?;
+    // Convert to distances: 1 - similarity (so lower is better)
+    let ones = Tensor::ones(similarities_1d.shape(), similarities_1d.dtype(), similarities_1d.device())?;
+    let distances = ones.sub(&similarities_1d)?;
 
-    let cluster_id = max_idx.to_scalar::<i64>()? as usize;
-    let similarity = max_sim.to_scalar::<f32>()?;
+    // Sort by distance (ascending - closest first)
+    let distances_vec: Vec<f32> = distances.to_vec1()?;
+    
+    let mut indexed_distances: Vec<(usize, f32)> = distances_vec
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| (i, d))
+        .collect();
+    indexed_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    Ok((cluster_id, similarity))
+    let sorted_indices: Vec<usize> = indexed_distances.iter().map(|(i, _)| *i).collect();
+    let sorted_distances: Vec<f32> = indexed_distances.iter().map(|(_, d)| *d).collect();
+
+    Ok((sorted_indices, sorted_distances))
+}
+
+/// Route query using top-k cluster aggregation
+/// Returns (best_model, confidence, primary_cluster_id)
+fn route_with_topk_aggregation(
+    state: &ClusterRouterState,
+    sorted_cluster_indices: &[usize],
+    sorted_distances: &[f32],
+) -> (String, f32, usize) {
+    let top_k = state.top_k.min(state.n_clusters);
+    
+    // Get top-k clusters and their distances
+    let topk_indices: Vec<usize> = sorted_cluster_indices.iter().take(top_k).copied().collect();
+    let topk_distances: Vec<f32> = sorted_distances.iter().take(top_k).copied().collect();
+
+    // Convert distances to probabilities using softmax with temperature beta
+    // logits = -beta * distance (lower distance = higher logit)
+    let logits: Vec<f32> = topk_distances.iter().map(|d| -state.beta * d).collect();
+    
+    // Softmax: exp(logit - max) / sum(exp(logit - max))
+    let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let exp_logits: Vec<f32> = logits.iter().map(|l| (l - max_logit).exp()).collect();
+    let sum_exp: f32 = exp_logits.iter().sum();
+    let probs: Vec<f32> = exp_logits.iter().map(|e| e / sum_exp).collect();
+
+    // Aggregate model scores across top-k clusters
+    // Using rank-based scoring: score = prob * (1 / (rank + 1))
+    let mut model_scores: HashMap<String, f32> = HashMap::new();
+    
+    for (cluster_idx, prob) in topk_indices.iter().zip(probs.iter()) {
+        if *cluster_idx >= state.cluster_model_rankings.len() {
+            continue;
+        }
+        
+        let rankings = &state.cluster_model_rankings[*cluster_idx];
+        
+        for (rank, model_name) in rankings.iter().enumerate() {
+            let rank_score = 1.0 / (rank as f32 + 1.0);
+            *model_scores.entry(model_name.clone()).or_insert(0.0) += prob * rank_score;
+        }
+    }
+
+    // Ensure all models have a score (default 0)
+    for model_name in &state.model_names {
+        model_scores.entry(model_name.clone()).or_insert(0.0);
+    }
+
+    // Apply cost adjustment if alpha < 1.0
+    if state.alpha < 1.0 {
+        let max_cost = state.model_costs.values().cloned().fold(1.0f32, f32::max);
+        for (model_name, score) in model_scores.iter_mut() {
+            let cost = state.model_costs.get(model_name).copied().unwrap_or(1.0);
+            let normalized_cost = cost / max_cost;
+            // Adjust score: alpha * perf_score - (1 - alpha) * cost
+            *score = state.alpha * *score - (1.0 - state.alpha) * normalized_cost;
+        }
+    }
+
+    // Find best model
+    let (best_model, best_score) = model_scores
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(m, s)| (m.clone(), *s))
+        .unwrap_or_else(|| (String::new(), 0.0));
+
+    // Confidence is based on how focused the probability distribution is
+    // and the score of the best model
+    let confidence = probs[0] * (1.0 - topk_distances[0]).max(0.0);
+    
+    let primary_cluster = topk_indices[0];
+
+    (best_model, confidence, primary_cluster)
 }
 
 /// L2 normalize embeddings (critical for cosine similarity)
@@ -297,9 +398,10 @@ fn train_cluster_router(
         }
     }
 
-    // Compute average scores and select best model per cluster
+    // Compute average scores, rankings, and select best model per cluster
     let mut cluster_avg_scores: Vec<HashMap<String, f32>> = Vec::with_capacity(n_clusters);
     let mut cluster_best_model: Vec<String> = Vec::with_capacity(n_clusters);
+    let mut cluster_rankings: Vec<Vec<String>> = Vec::with_capacity(n_clusters);
 
     for cluster_id in 0..n_clusters {
         let mut avg_scores: HashMap<String, f32> = HashMap::new();
@@ -311,20 +413,42 @@ fn train_cluster_router(
             }
         }
 
+        // Ensure all models have scores (default 0)
+        for model_name in &model_names {
+            avg_scores.entry(model_name.clone()).or_insert(0.0);
+        }
+
+        // Build ranking: sort models by score descending
+        let mut sorted_models: Vec<(String, f32)> = avg_scores
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        sorted_models.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        let ranking: Vec<String> = sorted_models.iter().map(|(m, _)| m.clone()).collect();
+
         // Select best model considering cost
         let best_model = select_best_model_for_cluster(&avg_scores, model_costs, config.alpha);
         cluster_best_model.push(best_model);
         cluster_avg_scores.push(avg_scores);
+        cluster_rankings.push(ranking);
     }
+
+    let top_k = (config.top_k as usize).max(1).min(n_clusters);
+    let beta = config.beta.max(0.1); // Ensure beta is positive
 
     Ok(ClusterRouterState {
         cluster_centers,
         cluster_best_model,
         cluster_model_scores: cluster_avg_scores,
+        cluster_model_rankings: cluster_rankings,
         model_costs: model_costs.clone(),
         model_names,
         embedding_dim,
         n_clusters,
+        top_k,
+        beta,
+        alpha: config.alpha,
         device: device.clone(),
     })
 }
@@ -482,7 +606,7 @@ pub extern "C" fn init_cluster_router(
     }
 }
 
-/// Route a query to the best model based on cluster membership
+/// Route a query to the best model using top-k cluster aggregation
 ///
 /// # Safety
 /// - `query_embedding` must be a valid pointer to f32 array
@@ -540,29 +664,30 @@ pub extern "C" fn route_query(
             }
         };
 
-    // Find nearest cluster
-    let (cluster_id, similarity) = match find_nearest_cluster(&query_tensor, &state.cluster_centers)
-    {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error: Failed to find nearest cluster: {:?}", e);
-            unsafe {
-                (*result) = ClusterRouteResult::default();
+    // Compute distances to all clusters
+    let (sorted_indices, sorted_distances) =
+        match compute_cluster_distances(&query_tensor, &state.cluster_centers) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error: Failed to compute cluster distances: {:?}", e);
+                unsafe {
+                    (*result) = ClusterRouteResult::default();
+                }
+                return -1;
             }
-            return -1;
-        }
-    };
+        };
 
-    // Get best model for cluster
-    let best_model = if cluster_id < state.cluster_best_model.len() {
-        state.cluster_best_model[cluster_id].clone()
-    } else {
-        eprintln!("Error: Invalid cluster ID {}", cluster_id);
+    // Route using top-k aggregation
+    let (best_model, confidence, primary_cluster) =
+        route_with_topk_aggregation(state, &sorted_indices, &sorted_distances);
+
+    if best_model.is_empty() {
+        eprintln!("Error: No best model found");
         unsafe {
             (*result) = ClusterRouteResult::default();
         }
         return -1;
-    };
+    }
 
     // Convert model name to C string
     let model_cstring = match CString::new(best_model) {
@@ -579,8 +704,8 @@ pub extern "C" fn route_query(
     unsafe {
         (*result) = ClusterRouteResult {
             model_name: model_cstring.into_raw(),
-            confidence: similarity,
-            cluster_id: cluster_id as i32,
+            confidence,
+            cluster_id: primary_cluster as i32,
             error: false,
         };
     }
