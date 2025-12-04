@@ -81,7 +81,7 @@ cluster_router:
   # alpha = 1.0: Always select best performing model
   # alpha = 0.5: Balance performance and cost
   # alpha = 0.0: Always select cheapest model
-  alpha: 0.8
+  alpha: 0.5
   
   # Top-k clusters to consider for routing
   # Higher values provide smoother routing
