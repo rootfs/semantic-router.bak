@@ -27,7 +27,7 @@ intelligent_routing:
     enabled: true
     n_clusters: 10
     alpha: 0.8  # 1.0=performance only, 0.0=cost only
-    experience_db_path: "tutorial/cluster_router/mmlu_pro_experience_db_qwen3.json"
+    experience_db_path: "examples/cluster_router/mmlu_pro_experience_db_qwen3.json"
     embedding_model: "qwen3"
     embedding_dim: 1024
     model_costs:

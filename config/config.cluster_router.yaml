@@ -102,7 +102,7 @@ cluster_router:
   
   # Experience database path (JSON format)
   # Embeddings generated with qwen3 model for consistency with routing
-  experience_db_path: "tutorial/cluster_router/mmlu_pro_experience_db_qwen3.json"
+  experience_db_path: "examples/cluster_router/mmlu_pro_experience_db_qwen3.json"
   
   # Embedding model for query embedding at routing time
   embedding_model: "qwen3"
