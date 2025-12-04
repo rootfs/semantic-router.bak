@@ -1,0 +1,1302 @@
+[
+  {
+    "query_text": "Ethanol is a type of alcohol made from plants. Sugarcane and corn, which are both used in foods such as cereals and breads, are used to make ethanol. Burning ethanol provides a clean source of energy because the products of ethanol are water and carbon dioxide. Therefore, mixing ethanol with gasoline reduces harmful waste products. In the 1970s, many Brazilians drove cars with engines that used an ethanol gasoline mixture. This alternative fuel conserved the limited supply of gasoline available at that time. In the 1990s, gasoline became cheaper than ethanol, and Brazilians returned to driving more gasoline-fueled cars. Recently, Brazilians started driving more cars that use an ethanol-gasoline mixture. Which group would benefit most if drivers in the United States fueled their vehicles with an ethanol-gasoline mixture?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MSA_2012_8_30",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Which geologic process most likely caused the formation of the Mount St. Helens Volcano?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7068513",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "A student mixed some yellow sulfur powder with some iron filings. She was able to take the iron out of the sulfur by using a magnet. She then remixed the iron and sulfur in a test tube and heated it. After it cooled, she removed the substance from the test tube but could not separate the iron from the sulfur using the magnet. Which type of change occurred in the material when it was heated?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7131530",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Which plant cells contain half the DNA from one parent plant?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7219328",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "During an experiment, a class heated a balloon that had an initial circumference of 25 cm. The circumference increased to 27 cm. Which is the best conclusion that can be drawn?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_402539",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "If a body of water has high turbidity levels, what can most likely be concluded?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_NCEOGA_2013_8_28",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Electricians wear rubber boots and gloves while working with circuits. The main reason for this is because",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MEAP_2005_8_39",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "A farmer thinks that the vegetables on her farm are not getting enough water. Her son suggests that they use water from the nearby ocean to water the vegetables. Is this a good idea?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_NAEP_2005_4_S13+14",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Leaves fall from deciduous trees onto the forest floor. These leaves decay slowly and become part of the topsoil. Which change is most likely to have a positive impact on the nutrients available in the topsoil?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7162400",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Students want to know how big the leaves of an oak tree are. The BEST way to measure the size of the leaves is to ___.",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_VASoL_2008_3_32",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Some students are performing hardness tests on several substances. X scratches Y. Y scratches Z. Z scratches W. Which of these statements best describes substance W's hardness?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_LBS11018",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "The terms gas exchange, diaphragm, and inhale are most closely associated with which system in the human body?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_2006_8_1",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Students want to compare rainfall data collected from the homes of different students in the area. What is one way the students can reduce the possibility of uncontrolled variables affecting their data?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7222793",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Sandbars form in many rivers because of",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_400853",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Monica grows vegetable plants in her garden. The plants have holes in their leaves and look unhealthy. Which task should Monica do first to solve this problem?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_409245",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Copper and gold have similar reactive properties. On the Periodic Table of the Elements, these elements are most likely to",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7086520",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "All natural resources on Earth are either renewable or nonrenewable. Whether a resource is renewable or nonrenewable depends on how fast or slow the resource is replaced. If the resource is used faster than it is replaced, then the resource will, in time, disappear. Which activity shows the use of a nonrenewable natural resource?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MDSA_2009_5_20",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "A ball is thrown downward onto a concrete floor and bounces upward. What supplies the upward force that makes the ball bounce?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MEA_2013_8_15",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Which is the most appropriate unit for expressing the distance that an airplane travels in 2 hours?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7217368",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "The Sun is an example of which of the following?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_2003_8_pg94",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Gravity and magnetism are both",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_NYSEDREGENTS_2012_4_9",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "In the region where two continental plates collide, what geological feature most often forms?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7026723",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "All galaxies in the universe",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7114100",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "A class plans an investigation to see which brand of light bulb lasts the longest. Which of these steps should come first?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_407400",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Gabbro and basalt are classified as igneous rocks. Even though the names are different, they have the same chemical composition. Geologists normally use what feature for identification purposes to differentiate between these two rock types?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 0.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_177748",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "A container tips over and liquid spills on the work surface during a laboratory exercise. What should the student do first?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_400142",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "At the beginning of a science class, the teacher opened a small sealed jar and placed it on a table. The contents of the jar spread throughout the room during class. Which of the following did the jar most likely contain?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 0.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_2015_5_19",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "A scientist is performing an experiment to determine the melting point of a new substance. Which action could increase the likelihood of obtaining accurate results?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_AKDE&ED_2008_8_1",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "The development of a nuclear power plant at an ocean site is expected to produce an enormous amount of electric power for a large population. Ocean water will be used to cool the plant and then returned to the ocean. What unintended consequence should be analyzed before starting construction?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7212328",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Which of the following is a characteristic of elements?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_2002_8_17",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "What is one effect the hydrosphere has on the lithosphere?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7093958",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Why is the structure of a sperm cell very different from the structure of an egg cell?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_ACTAAP_2013_7_2",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Although the scientific method states that conclusions should be based on evidence, scientists do not always agree on the conclusions because",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7075040",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "A hypothesis is included in a scientific investigation because it",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_407613",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which statement correctly describes a physical characteristic of the Moon?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_414274",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Producers can use photosynthesis to capture energy for food webs in most ecosystems. In which ecosystem must producers capture energy from gases such as methane and hydrogen sulfide?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_417465",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which action explains how a somatic cell mutation can harm an organism?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7252088",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which characteristic must be present for an organism to be classified as a reptile?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_183890",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Which range of the pH scale would most likely include acid rain?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_402348",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Balsam fir trees in Maine have similar needle length. Why do the trees have similar needle length?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MEA_2014_5_11",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Students want to compare the size of microorganism communities in 500-milliliter water samples from each of two ponds. Which factor most likely will affect the accuracy of their observations?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 0.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_LEAP_2007_8_10418",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which alternative energy resource is produced from plants?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_413299",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Trail mix is a type of snack. One kind of trail mix is made of raisins, chocolate pieces, peanuts, and sunflower seeds. Which statement describes why trail mix is a mixture?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_401185",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Two different species evolving from a common ancestor most likely occurs",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7107328",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "The types of organisms on Earth changed as a result of increased levels of atmospheric oxygen. Which process contributed to this buildup of oxygen in Earth's atmosphere?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 0.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7230388",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Which of the following statements best explains why the lower mantle of Earth is much more rigid and dense than the upper mantle?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_2005_8_2",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which BEST describes the surface of the Earth over billions of years?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_1995_8_J1",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "A carbon monoxide detector is used in homes to",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_401116",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Which physical features are part of an animal that would most likely be classified as a reptile?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_AKDE&ED_2012_8_20",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Coal is formed from",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_401312",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "What are two resources in terrestrial biomes that most vertebrates (animals with backbones) compete for?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MEA_2014_8_10",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which of the following is the best way to determine whether two people are related?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_2007_8_pg109",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Some plants produce fruit such as apples. What is one function of a fruit?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_2011_4_pg45",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Which of these questions cannot be answered scientifically?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7270515",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "A researcher notices differences in the shapes of leaves on different trees of the same species. Which of these is the most accurate way to record these differences?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7206378",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Polar bears are very heavy. About half of a polar bear's mass is fat. How does this adaptation most help a polar bear as it hunts in the Arctic Ocean?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_400012",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "A car tire runs over a can and crushes it completely. Which statement is true for the atoms of the structure of the can?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_2011_8_pg31",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Mina wanted to know how much water would evaporate from a graduated cylinder in a day. On Day 1, Mina filled a graduated cylinder with 150 milliliters (mL) of water. On Day 2, she observed the volume of water dropped to 148.5 mL. If the water has a density of 1.0 grams per milliliter (g/mL), what was the mass of the water that evaporated?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 0.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_411224",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Two girls are pulling on opposite ends of a thick rope. Both girls pull on the rope with the same force but in opposite directions. If both girls continue to pull with the same force, what will most likely happen?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_405827",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Multicellular organisms have four main types of tissue which include muscle, epithelial, nerve, and connective tissue. Which organ consists mostly of nerve tissue?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7056858",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "One characteristic that is unique to water is that it",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7057488",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Some factories release pollutants into the air that form acid rain. What determines where the acid rain is most likely to fall?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_1998_4_13",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Which of the following sets contains only objects that shine as a result of reflected light?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_CSZ30169",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "A student pours salt water into a beaker and then pours some acid into another beaker. The student returns to the lab table and realizes that the samples are not marked. What should the student do?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7064750",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Black-and-white warblers migrate from their breeding range in Canada to southern Florida for the winter. Which is most likely to occur if environmental factors limit the number of female warblers that return to Canada?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7203560",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Desalination removes salt from water. Removing salt from water can be risky because the process is expensive and slow. Sometimes the technology does not work. A beach community's surface and ground water was decreasing. The community decided to construct a large-scale plant to remove salt from the bay water. The plan to construct a salt-removing plant was accepted because the community",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 0.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7219678",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "A research study concluded that people who work longer hours increase their chances of having higher blood pressure. This conclusion was developed from a study of 200 men of different ages. How is this investigation biased?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_406427",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Gulf sturgeons, a type of fish, live in saltwater along the gulf coast of Florida. They swim upriver to breed in clean freshwater. After several years, the young sturgeons migrate downriver to the coastal saltwater environments. Which would be the most likely effect on gulf sturgeons if dams were built along these rivers?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7174738",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Animals are made up of many atoms. What happens to the atoms after an animal has died?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_1995_8_J6",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "What happens when an atom gains an electron?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7097493",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Which renewable resource is generated by air convection currents?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_402282",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Michael claims he can use the bands on a woolly caterpillar to predict winter. He says long black bands mean a hard winter, and short black bands mean a mild winter. Last week he found three woolly caterpillars with long black bands. Which of the following do his observations show?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_WASL_2004_8_17",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Which is NOT an example of a chemical change?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_1995_8_Q15",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "The inner core of Earth is solid because of the",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_404097",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "An engineer is using a computer to design a bridge. Which test is the most important for safety purposes?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7013965",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "Two identical sheets of paper are used in an experiment; one is crumpled into a ball and the other is flat. What will most likely happen when they are dropped at the same time from the same height?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 0.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7007420",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "A pharmaceutical company published experimental data showing that a new medication improved cholesterol levels in the people who participated in the study. Which professional most likely did not contribute to developing this medication?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MDSA_2012_8_6",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which lists the correct order of changes that happen to a plant in spring?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_VASoL_2010_3_22",
+      "correct_answer": "A"
+    }
+  },
+  {
+    "query_text": "A student makes the hypothesis that rubbing a balloon on a shirt and then putting it on the wall will cause it to stick due to static electricity. Once the experiment is conducted, what is the best way to prove that the results are reliable?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_402121",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "A scientist studying outer space makes a calculation of 4.3 light-years. What does this calculation most likely represent?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_407019",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Winds blowing inland from oceans tend to have greater moisture than winds blowing over land. How does the high moisture content affect the coastal area climate?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7005005",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "A predator is an animal that feeds on other animals. Which of these is a predator?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_TIMSS_2011_4_pg5",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Planets orbit",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_1998_4_19",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "The discovery of fossilized coral reefs on land is evidence that",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_403907",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Current moving through a circuit is stopped with a",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_401168",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which change would be harmful to the habitat of a squirrel?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_405296",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "How does the speed of radio waves compare with the speed of infrared waves?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7018410",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which law was Galileo Galilei responsible for describing?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7038518",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Which of these human activities most likely helped in depleting the ozone layer?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7041650",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "All organisms process nutrients. Which sentence best describes how plants and animals process nutrients similarly?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_405950",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "What is the main energy source for deep ocean currents that move large volumes of water around the planet?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 0.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7015540",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Which material is the best heat insulator?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 0.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_402257",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Beavers build their homes in ponds and streams. Which characteristic is least critical to building homes in an aquatic environment?",
+    "model_scores": {
+      "math": 0.0,
+      "coder": 0.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_412374",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "How are sedimentary rocks made?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_180373",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Which statement best describes how the Internet has helped improve life for many people?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_405873",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "Which sentence could not explain why the first place swimmer was faster than the second place swimmer?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_402132",
+      "correct_answer": "B"
+    }
+  },
+  {
+    "query_text": "A party shop delivers helium-filled balloons to homes and businesses. The owners realize from experience that on hot summer days they should inflate the balloons only three-quarters full. On cold winter days they can fully inflate the balloons. Which of the following is the best hypothesis to explain this observation?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_2004_9_21-v1",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Soil texture is improved by",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 0.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_SC_401366",
+      "correct_answer": "D"
+    }
+  },
+  {
+    "query_text": "Coal is a natural material, formed from ancient organic compounds. Which element is least likely to be found in a sample of coal?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_Mercury_7264093",
+      "correct_answer": "C"
+    }
+  },
+  {
+    "query_text": "Which of the following materials are direct products of photosynthesis?",
+    "model_scores": {
+      "math": 1.0,
+      "coder": 1.0,
+      "general": 1.0
+    },
+    "metadata": {
+      "dataset": "arc-challenge",
+      "question_id": "arc-challenge_MCAS_2009_8_17",
+      "correct_answer": "B"
+    }
+  }
+]
