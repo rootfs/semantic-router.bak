@@ -2728,79 +2728,105 @@ func InitClusterRouter(experienceData []ExperienceRecord, modelCosts map[string]
 		beta:           C.float(beta),
 	}
 
-	// Prepare experience records
-	cRecords := make([]C.ExperienceRecordFFI, len(experienceData))
+	// Allocate C memory for experience records to avoid cgo pointer issues
+	cRecordsPtr := (*C.ExperienceRecordFFI)(C.malloc(C.size_t(len(experienceData)) * C.size_t(unsafe.Sizeof(C.ExperienceRecordFFI{}))))
+	defer C.free(unsafe.Pointer(cRecordsPtr))
 
-	// Keep track of allocated C strings for cleanup
-	var modelNamePtrs [][]*C.char
+	cRecords := unsafe.Slice(cRecordsPtr, len(experienceData))
+
+	// Track all C allocations for cleanup
+	var allCStrings []*C.char
+	var allCFloatArrays []*C.float
+	var allCStringArrays []*(*C.char)
+
+	defer func() {
+		for _, s := range allCStrings {
+			C.free(unsafe.Pointer(s))
+		}
+		for _, arr := range allCFloatArrays {
+			C.free(unsafe.Pointer(arr))
+		}
+		for _, arr := range allCStringArrays {
+			C.free(unsafe.Pointer(arr))
+		}
+	}()
 
 	for i, record := range experienceData {
 		if len(record.Embedding) == 0 {
 			return fmt.Errorf("experience record %d has empty embedding", i)
 		}
 
-		// Prepare embedding
-		cRecords[i].embedding = (*C.float)(unsafe.Pointer(&record.Embedding[0]))
+		// Allocate C memory for embedding
+		embeddingPtr := (*C.float)(C.malloc(C.size_t(len(record.Embedding)) * C.size_t(unsafe.Sizeof(C.float(0)))))
+		allCFloatArrays = append(allCFloatArrays, embeddingPtr)
+		embeddingSlice := unsafe.Slice(embeddingPtr, len(record.Embedding))
+		for j, v := range record.Embedding {
+			embeddingSlice[j] = C.float(v)
+		}
+
+		cRecords[i].embedding = embeddingPtr
 		cRecords[i].embedding_len = C.int(len(record.Embedding))
 
 		// Prepare model names and scores
 		numModels := len(record.ModelScores)
 		if numModels > 0 {
-			modelNames := make([]*C.char, numModels)
-			modelScores := make([]C.float, numModels)
+			// Allocate C array for model names
+			modelNamesPtr := (*(*C.char))(C.malloc(C.size_t(numModels) * C.size_t(unsafe.Sizeof((*C.char)(nil)))))
+			allCStringArrays = append(allCStringArrays, modelNamesPtr)
+			modelNames := unsafe.Slice(modelNamesPtr, numModels)
+
+			// Allocate C array for scores
+			modelScoresPtr := (*C.float)(C.malloc(C.size_t(numModels) * C.size_t(unsafe.Sizeof(C.float(0)))))
+			allCFloatArrays = append(allCFloatArrays, modelScoresPtr)
+			modelScores := unsafe.Slice(modelScoresPtr, numModels)
 
 			j := 0
 			for name, score := range record.ModelScores {
-				modelNames[j] = C.CString(name)
+				cName := C.CString(name)
+				allCStrings = append(allCStrings, cName)
+				modelNames[j] = cName
 				modelScores[j] = C.float(score)
 				j++
 			}
 
-			cRecords[i].model_names = (**C.char)(unsafe.Pointer(&modelNames[0]))
-			cRecords[i].model_scores = (*C.float)(unsafe.Pointer(&modelScores[0]))
+			cRecords[i].model_names = (**C.char)(unsafe.Pointer(modelNamesPtr))
+			cRecords[i].model_scores = modelScoresPtr
 			cRecords[i].num_models = C.int(numModels)
-
-			modelNamePtrs = append(modelNamePtrs, modelNames)
 		}
 	}
-
-	// Defer cleanup of model name strings
-	defer func() {
-		for _, names := range modelNamePtrs {
-			for _, name := range names {
-				C.free(unsafe.Pointer(name))
-			}
-		}
-	}()
 
 	// Prepare model costs
-	var modelCostNames []*C.char
-	var modelCostValues []C.float
-
-	for name, cost := range modelCosts {
-		modelCostNames = append(modelCostNames, C.CString(name))
-		modelCostValues = append(modelCostValues, C.float(cost))
-	}
-
-	// Defer cleanup of cost name strings
-	defer func() {
-		for _, name := range modelCostNames {
-			C.free(unsafe.Pointer(name))
-		}
-	}()
-
+	numCosts := len(modelCosts)
 	var costNamesPtr **C.char
 	var costValuesPtr *C.float
-	numCosts := len(modelCosts)
 
 	if numCosts > 0 {
-		costNamesPtr = (**C.char)(unsafe.Pointer(&modelCostNames[0]))
-		costValuesPtr = (*C.float)(unsafe.Pointer(&modelCostValues[0]))
+		// Allocate C array for cost names
+		cCostNamesPtr := (*(*C.char))(C.malloc(C.size_t(numCosts) * C.size_t(unsafe.Sizeof((*C.char)(nil)))))
+		allCStringArrays = append(allCStringArrays, cCostNamesPtr)
+		costNames := unsafe.Slice(cCostNamesPtr, numCosts)
+
+		// Allocate C array for cost values
+		cCostValuesPtr := (*C.float)(C.malloc(C.size_t(numCosts) * C.size_t(unsafe.Sizeof(C.float(0)))))
+		allCFloatArrays = append(allCFloatArrays, cCostValuesPtr)
+		costValues := unsafe.Slice(cCostValuesPtr, numCosts)
+
+		j := 0
+		for name, cost := range modelCosts {
+			cName := C.CString(name)
+			allCStrings = append(allCStrings, cName)
+			costNames[j] = cName
+			costValues[j] = C.float(cost)
+			j++
+		}
+
+		costNamesPtr = (**C.char)(unsafe.Pointer(cCostNamesPtr))
+		costValuesPtr = cCostValuesPtr
 	}
 
 	// Call C function
 	result := C.init_cluster_router(
-		(*C.ExperienceRecordFFI)(unsafe.Pointer(&cRecords[0])),
+		cRecordsPtr,
 		C.int(len(experienceData)),
 		costNamesPtr,
 		costValuesPtr,
