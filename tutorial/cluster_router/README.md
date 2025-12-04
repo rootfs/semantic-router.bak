@@ -1,164 +1,67 @@
 # Cluster Router Tutorial
 
-This tutorial demonstrates how to use the cluster-based model routing system.
-
-## Files
-
-| File | Description |
-|------|-------------|
-| `ood_evaluation_cache.json` | Cached inference results from multiple LLMs on OOD datasets |
-| `convert_cache_to_experience_db.py` | Converts cache to experience database format |
-| `evaluate_ood_generalization.py` | Original Python evaluation script (reference) |
-| `analyze_*.py` | Various analysis scripts for routing performance |
-
-## Quick Start
-
-### 1. Convert Cached Inference to Experience Database
+## 1. Start vLLM Containers
 
 ```bash
-cd tutorial/cluster_router
-python convert_cache_to_experience_db.py
+# Math model (port 8081)
+docker run --gpus '"device=0"' -p 8081:8000 vllm/vllm-openai:latest \
+  vllm serve --model Qwen/Qwen2.5-Math-7B-Instruct --trust-remote-code --max-model-len 4096
+
+# Coder model (port 8082)
+docker run --gpus '"device=1"' -p 8082:8000 vllm/vllm-openai:latest \
+  vllm serve --model Qwen/Qwen2.5-Coder-7B-Instruct --trust-remote-code --max-model-len 4096
+
+# General model (port 8083)
+docker run --gpus '"device=2"' -p 8083:8000 vllm/vllm-openai:latest \
+  vllm serve --model Qwen/Qwen2.5-14B-Instruct-AWQ --trust-remote-code --quantization awq --max-model-len 4096
 ```
 
-This creates:
-- `experience_db.json` - Full experience database
-- `experience_db_sample.json` - 100-entry sample for testing
+## 2. Configuration
 
-### 2. Use with Go Cluster Router
-
-```go
-package main
-
-import (
-    "log"
-    
-    candle "github.com/vllm-project/semantic-router/candle-binding"
-    "github.com/vllm-project/semantic-router/src/semantic-router/pkg/classification"
-    "github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
-)
-
-func main() {
-    // Load experience database
-    cfg := &config.ClusterRouterConfig{
-        NClusters:     10,
-        Alpha:         0.8,  // 80% performance, 20% cost
-        TopK:          3,
-        Beta:          9.0,
-        EmbeddingModel: "qwen3",
-        EmbeddingDim:   768,
-    }
-    
-    expDB := classification.NewExperienceDatabase(cfg)
-    if err := expDB.LoadFromFile("tutorial/cluster_router/experience_db.json"); err != nil {
-        log.Fatalf("Failed to load experience: %v", err)
-    }
-    
-    // Create and train router
-    modelCosts := map[string]float32{
-        "math":    7.0,   // 7B model
-        "coder":   7.0,   // 7B model
-        "general": 14.0,  // 14B model
-    }
-    
-    router := classification.NewClusterRouter(cfg, "general", []string{"math", "coder", "general"})
-    records := expDB.ToExperienceRecords()
-    
-    if err := router.Train(records); err != nil {
-        log.Fatalf("Failed to train: %v", err)
-    }
-    
-    // Export for later use
-    if err := candle.ExportClusterRouter("models/cluster_router"); err != nil {
-        log.Fatalf("Failed to export: %v", err)
-    }
-    
-    // Route a query
-    result, err := router.RouteWithText("What is the derivative of x^2?")
-    if err != nil {
-        log.Fatalf("Failed to route: %v", err)
-    }
-    
-    log.Printf("Routed to: %s (confidence: %.2f)", result.ModelName, result.Confidence)
-}
-```
-
-## Experience Database Format
-
-```json
-[
-    {
-        "query_text": "What is 2+2?",
-        "model_scores": {
-            "math": 1.0,
-            "coder": 0.0,
-            "general": 1.0
-        },
-        "metadata": {
-            "dataset": "arc-challenge",
-            "question_id": "q123",
-            "correct_answer": "A"
-        }
-    }
-]
-```
-
-- `query_text`: The question/prompt (embedding will be generated)
-- `model_scores`: Performance scores (1.0 = correct, 0.0 = incorrect)
-- `metadata`: Optional debugging info
-
-## Datasets in Cache
-
-The `ood_evaluation_cache.json` contains results from:
-
-| Dataset | Description | Type |
-|---------|-------------|------|
-| arc-challenge | Science reasoning | Multiple choice |
-| openbookqa | Common sense | Multiple choice |
-| sciq | Science QA | Multiple choice |
-| commonsenseqa | Common sense reasoning | Multiple choice |
-| truthfulqa | Factual accuracy | Multiple choice |
-| hellaswag | Sentence completion | Multiple choice |
-| gpqa | Graduate-level science | Multiple choice |
-
-## Analysis Scripts
-
-### Cost-Aware Routing Analysis
-```bash
-python analyze_cost_aware_routing.py
-```
-Analyzes the cost-performance tradeoff with different alpha values.
-
-### Pareto Frontier Analysis
-```bash
-python analyze_pareto_frontier.py
-```
-Generates Pareto frontier plots comparing accuracy vs cost.
-
-### MMLU-Pro Specific Analysis
-```bash
-python analyze_mmlu_pro_pareto.py
-```
-Analyzes routing on MMLU-Pro benchmark specifically.
-
-## Configuration Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `n_clusters` | 10 | Number of K-means clusters |
-| `alpha` | 1.0 | Cost-performance balance (1.0 = performance only) |
-| `top_k` | 3 | Number of clusters for aggregation |
-| `beta` | 9.0 | Softmax temperature (higher = more focused) |
-
-## Model Costs
-
-Example cost configuration based on model size:
+Use `config/config.cluster_router.yaml`:
 
 ```yaml
-model_costs:
-  math: 7.0      # 7B parameter model
-  coder: 7.0     # 7B parameter model  
-  general: 14.0  # 14B parameter model
+# Key settings
+intelligent_routing:
+  cluster_router:
+    enabled: true
+    n_clusters: 10
+    alpha: 0.8  # 1.0=performance only, 0.0=cost only
+    experience_db_path: "tutorial/cluster_router/mmlu_pro_experience_db_qwen3.json"
+    embedding_model: "qwen3"
+    embedding_dim: 1024
+    model_costs:
+      math: 7.0
+      coder: 7.0
+      general: 14.0
 ```
 
-With `alpha=0.8`, the router will prefer performance but consider cost when models are similar in accuracy.
+## 3. Generate Experience Database
 
+```bash
+# Requires: datasets, sentence_transformers, requests
+python generate_mmlu_pro_experience.py
+```
+
+This queries MMLU-Pro questions against all models, evaluates correctness, and generates embeddings.
+
+## 4. Run Router
+
+```bash
+cd /path/to/semantic-router
+make build
+CUDA_VISIBLE_DEVICES=3 LD_LIBRARY_PATH=candle-binding/target/release:$LD_LIBRARY_PATH \
+  ./bin/router -config config/config.cluster_router.yaml
+```
+
+## 5. Test
+
+```bash
+# Through Envoy (port 8801)
+curl http://localhost:8801/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "auto", "messages": [{"role": "user", "content": "What is 2+2?"}]}'
+
+# E2E accuracy test
+python test_router_e2e.py
+```
