@@ -11,8 +11,11 @@ import requests
 import random
 from collections import Counter
 
+import os
+
 ROUTER_URL = "http://localhost:8801/v1/chat/completions"
-OOD_CACHE = "examples/cluster_router/ood_evaluation_cache.json"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OOD_CACHE = os.path.join(SCRIPT_DIR, "ood_evaluation_cache.json")
 
 MODEL_MAP = {
     'Qwen/Qwen2.5-Math-7B-Instruct': 'math',
