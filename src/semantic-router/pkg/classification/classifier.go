@@ -513,6 +513,36 @@ func (c *Classifier) RouteTextWithClusterRouter(text string) (string, float32, e
 	return c.clusterRouter.RouteWithText(text, embeddingModel, embeddingDim)
 }
 
+// ReloadExperienceDatabase reloads the experience database from the configured path
+// and re-trains the cluster router. This supports hot-reload of the experience DB.
+func (c *Classifier) ReloadExperienceDatabase() error {
+	if !c.IsClusterRouterEnabled() {
+		return fmt.Errorf("cluster router not enabled")
+	}
+
+	dbPath := c.Config.ClusterRouter.ExperienceDBPath
+	if dbPath == "" {
+		return fmt.Errorf("experience database path not configured")
+	}
+
+	logging.Infof("Hot-reloading experience database from %s", dbPath)
+
+	if err := LoadExperienceDBAndTrainRouter(dbPath, &c.Config.ClusterRouter, c.clusterRouter); err != nil {
+		return fmt.Errorf("failed to reload experience database: %w", err)
+	}
+
+	logging.Infof("Experience database hot-reload completed successfully")
+	return nil
+}
+
+// GetExperienceDBPath returns the configured experience database path
+func (c *Classifier) GetExperienceDBPath() string {
+	if c.Config.ClusterRouter.Enabled {
+		return c.Config.ClusterRouter.ExperienceDBPath
+	}
+	return ""
+}
+
 // initializeCategoryClassifier initializes the category classification model
 func (c *Classifier) initializeCategoryClassifier() error {
 	if !c.IsCategoryEnabled() || c.categoryInitializer == nil {

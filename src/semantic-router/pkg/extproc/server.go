@@ -110,6 +110,9 @@ func (s *Server) Start() error {
 	defer cancel()
 	go s.watchConfigAndReload(ctx)
 
+	// Start experience database watcher in background (for hot-reload)
+	go s.watchExperienceDBAndReload(ctx)
+
 	// Wait for interrupt signal to gracefully shut down the server
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
@@ -150,6 +153,9 @@ func NewRouterService(r *OpenAIRouter) *RouterService {
 
 // Swap replaces the current router implementation.
 func (rs *RouterService) Swap(r *OpenAIRouter) { rs.current.Store(r) }
+
+// Get returns the current router implementation.
+func (rs *RouterService) Get() *OpenAIRouter { return rs.current.Load() }
 
 // Process delegates to the current router.
 func (rs *RouterService) Process(stream ext_proc.ExternalProcessor_ProcessServer) error {
@@ -272,6 +278,104 @@ func (s *Server) watchKubernetesConfigUpdates(ctx context.Context) {
 			s.service.Swap(newRouter)
 			logging.LogEvent("config_reloaded", map[string]interface{}{
 				"source": "kubernetes",
+			})
+		}
+	}
+}
+
+// watchExperienceDBAndReload watches the experience database file for changes
+// and hot-reloads the cluster router when the file is modified.
+func (s *Server) watchExperienceDBAndReload(ctx context.Context) {
+	// Get the experience DB path from the current router's classifier
+	router := s.service.Get()
+	if router == nil || router.Classifier == nil {
+		logging.Debugf("Experience DB watcher: no classifier available, skipping")
+		return
+	}
+
+	expDBPath := router.Classifier.GetExperienceDBPath()
+	if expDBPath == "" {
+		logging.Debugf("Experience DB watcher: no experience database configured, skipping")
+		return
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		logging.LogEvent("experience_db_watcher_error", map[string]interface{}{
+			"stage": "create_watcher",
+			"error": err.Error(),
+		})
+		return
+	}
+	defer watcher.Close()
+
+	expDBDir := filepath.Dir(expDBPath)
+
+	// Watch both the file and its directory
+	if err := watcher.Add(expDBDir); err != nil {
+		logging.LogEvent("experience_db_watcher_error", map[string]interface{}{
+			"stage": "watch_dir",
+			"dir":   expDBDir,
+			"error": err.Error(),
+		})
+		return
+	}
+	_ = watcher.Add(expDBPath)
+
+	logging.Infof("Experience DB watcher started for: %s", expDBPath)
+
+	// Debounce events
+	var (
+		pending bool
+		last    time.Time
+	)
+
+	reload := func() {
+		currentRouter := s.service.Get()
+		if currentRouter == nil || currentRouter.Classifier == nil {
+			logging.Warnf("Experience DB reload: no classifier available")
+			return
+		}
+
+		if err := currentRouter.Classifier.ReloadExperienceDatabase(); err != nil {
+			logging.LogEvent("experience_db_reload_failed", map[string]interface{}{
+				"file":  expDBPath,
+				"error": err.Error(),
+			})
+			return
+		}
+
+		logging.LogEvent("experience_db_reloaded", map[string]interface{}{
+			"file": expDBPath,
+		})
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove|fsnotify.Chmod) != 0 {
+				// Check if the event is for the experience DB file
+				if filepath.Base(ev.Name) == filepath.Base(expDBPath) || filepath.Dir(ev.Name) == expDBDir {
+					if !pending || time.Since(last) > 500*time.Millisecond {
+						pending = true
+						last = time.Now()
+						// Slight delay to let file settle
+						go func() { time.Sleep(500 * time.Millisecond); reload() }()
+					}
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			logging.LogEvent("experience_db_watcher_error", map[string]interface{}{
+				"stage": "watch_loop",
+				"error": err.Error(),
 			})
 		}
 	}
