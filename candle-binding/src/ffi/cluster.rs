@@ -216,12 +216,28 @@ fn find_nearest_cluster(
     Ok((cluster_id, similarity))
 }
 
+/// L2 normalize embeddings (critical for cosine similarity)
+fn l2_normalize(embeddings: &Tensor) -> Result<Tensor, candle_core::Error> {
+    // Compute L2 norm per row: sqrt(sum(x^2))
+    let sq = embeddings.sqr()?;
+    let row_sums = sq.sum(1)?; // [n_samples]
+    let norms = row_sums.sqrt()?.unsqueeze(1)?; // [n_samples, 1]
+    
+    // Avoid division by zero - add small epsilon
+    let eps = Tensor::full(1e-8f32, norms.shape(), norms.device())?;
+    let safe_norms = norms.maximum(&eps)?;
+    
+    // Normalize: x / ||x||
+    embeddings.broadcast_div(&safe_norms)
+}
+
 /// Train cluster router from experience data
 ///
 /// This function:
-/// 1. Runs K-means clustering on the experience embeddings
-/// 2. Computes average model performance per cluster
-/// 3. Selects best model for each cluster based on alpha (performance vs cost)
+/// 1. L2 normalizes the embeddings (required for cosine similarity)
+/// 2. Runs K-means clustering on the normalized experience embeddings
+/// 3. Computes average model performance per cluster
+/// 4. Selects best model for each cluster based on alpha (performance vs cost)
 fn train_cluster_router(
     experience_data: &[ExperienceRecord],
     model_costs: &HashMap<String, f32>,
@@ -254,9 +270,13 @@ fn train_cluster_router(
     let embeddings_tensor = Tensor::from_slice(&flat_embeddings, (n_samples, embedding_dim), device)
         .map_err(|e| format!("Failed to create embeddings tensor: {:?}", e))?;
 
-    // Run K-means clustering
+    // L2 normalize embeddings (critical for cosine similarity / K-means)
+    let embeddings_normalized = l2_normalize(&embeddings_tensor)
+        .map_err(|e| format!("Failed to L2 normalize embeddings: {:?}", e))?;
+
+    // Run K-means clustering on normalized embeddings
     let (cluster_centers, assignments) = kmeans_fit(
-        &embeddings_tensor,
+        &embeddings_normalized,
         n_clusters,
         config.max_iterations as usize,
         device,
