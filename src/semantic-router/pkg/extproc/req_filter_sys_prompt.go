@@ -32,8 +32,11 @@ func (r *OpenAIRouter) addSystemPromptIfConfigured(modifiedBody []byte, category
 	}
 
 	// Get system prompt configuration from plugins
+	if decision == nil {
+		return modifiedBody, nil
+	}
 	systemPromptConfig := decision.GetSystemPromptConfig()
-	if decision == nil || systemPromptConfig == nil || systemPromptConfig.SystemPrompt == "" {
+	if systemPromptConfig == nil || systemPromptConfig.SystemPrompt == "" {
 		return modifiedBody, nil
 	}
 

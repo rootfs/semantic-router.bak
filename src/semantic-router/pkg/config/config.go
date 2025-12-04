@@ -716,8 +716,11 @@ type HeaderPair struct {
 // Helper methods for Decision to access plugin configurations
 
 // GetPluginConfig returns the configuration for a specific plugin type
-// Returns nil if the plugin is not found
+// Returns nil if the plugin is not found or the decision is nil
 func (d *Decision) GetPluginConfig(pluginType string) interface{} {
+	if d == nil {
+		return nil
+	}
 	for _, plugin := range d.Plugins {
 		if plugin.Type == pluginType {
 			return plugin.Configuration

@@ -41,6 +41,24 @@ func (r *OpenAIRouter) performDecisionEvaluationAndModelSelection(originalModel 
 		return "", 0.0, entropy.ReasoningDecision{}, ""
 	}
 
+	// Try cluster router first if enabled
+	if r.Classifier.IsClusterRouterEnabled() {
+		clusterModel, confidence, err := r.Classifier.RouteTextWithClusterRouter(evaluationText)
+		if err != nil {
+			logging.Warnf("Cluster router failed: %v, falling back to decision engine", err)
+		} else {
+			logging.Infof("Cluster router selected model: %s (confidence=%.3f)", clusterModel, confidence)
+			// Return cluster routing result with minimal decision info
+			reasoningDecision := entropy.ReasoningDecision{
+				UseReasoning:     false,
+				Confidence:       float64(confidence),
+				DecisionReason:   "cluster_routing",
+				FallbackStrategy: "cluster_based_routing",
+			}
+			return "cluster_route", float64(confidence), reasoningDecision, clusterModel
+		}
+	}
+
 	// Perform decision evaluation using DecisionEngine
 	result, err := r.Classifier.EvaluateDecisionWithEngine(evaluationText)
 	if err != nil {
