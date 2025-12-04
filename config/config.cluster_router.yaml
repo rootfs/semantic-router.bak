@@ -1,5 +1,5 @@
 # Cluster Router Configuration
-# This config demonstrates AvengersPro-style intelligent model routing
+# Cluster Router Configuration - Intelligent model routing with cost awareness
 
 bert_model:
   model_id: models/all-MiniLM-L12-v2
@@ -66,7 +66,7 @@ classifier:
     use_cpu: true
     category_mapping_path: "models/category_classifier_modernbert-base_model/category_mapping.json"
 
-# Cluster Router Configuration (AvengersPro-style)
+# Cluster Router Configuration
 cluster_router:
   enabled: true
   
