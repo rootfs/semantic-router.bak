@@ -244,6 +244,9 @@ type Classifier struct {
 	mcpCategoryInitializer MCPCategoryInitializer
 	mcpCategoryInference   MCPCategoryInference
 
+	// Dependencies - Cluster-based model routing
+	clusterRouter *ClusterRouter
+
 	Config           *config.RouterConfig
 	CategoryMapping  *CategoryMapping
 	PIIMapping       *PIIMapping
@@ -292,6 +295,12 @@ func withKeywordEmbeddingClassifier(keywordEmbeddingInitializer EmbeddingClassif
 	return func(c *Classifier) {
 		c.keywordEmbeddingInitializer = keywordEmbeddingInitializer
 		c.keywordEmbeddingClassifier = keywordEmbeddingClassifier
+	}
+}
+
+func withClusterRouter(clusterRouter *ClusterRouter) option {
+	return func(c *Classifier) {
+		c.clusterRouter = clusterRouter
 	}
 }
 
@@ -404,12 +413,104 @@ func NewClassifier(cfg *config.RouterConfig, categoryMapping *CategoryMapping, p
 		options = append(options, withMCPCategory(mcpInit, mcpInf))
 	}
 
+	// Add cluster router if configured
+	if cfg.ClusterRouter.Enabled {
+		// Get list of available models from decisions
+		var availableModels []string
+		for _, decision := range cfg.Decisions {
+			for _, modelRef := range decision.ModelRefs {
+				if modelRef.LoRAName != "" {
+					availableModels = append(availableModels, modelRef.LoRAName)
+				} else {
+					availableModels = append(availableModels, modelRef.Model)
+				}
+			}
+		}
+
+		// Remove duplicates
+		modelSet := make(map[string]bool)
+		var uniqueModels []string
+		for _, model := range availableModels {
+			if !modelSet[model] {
+				modelSet[model] = true
+				uniqueModels = append(uniqueModels, model)
+			}
+		}
+
+		clusterRouter := NewClusterRouter(&cfg.ClusterRouter, cfg.DefaultModel, uniqueModels)
+		options = append(options, withClusterRouter(clusterRouter))
+		logging.Infof("Cluster router configured with %d available models", len(uniqueModels))
+
+		// Auto-load experience database and train router if path is configured
+		if cfg.ClusterRouter.ExperienceDBPath != "" {
+			if err := LoadExperienceDBAndTrainRouter(cfg.ClusterRouter.ExperienceDBPath, &cfg.ClusterRouter, clusterRouter); err != nil {
+				logging.Errorf("Failed to load experience database and train cluster router: %v", err)
+				// Continue without cluster routing - it will fall back to default model
+			}
+		}
+	}
+
 	return newClassifierWithOptions(cfg, options...)
 }
 
 // IsCategoryEnabled checks if category classification is properly configured
 func (c *Classifier) IsCategoryEnabled() bool {
 	return c.Config.CategoryModel.ModelID != "" && c.Config.CategoryMappingPath != "" && c.CategoryMapping != nil
+}
+
+// IsClusterRouterEnabled checks if cluster-based model routing is enabled
+func (c *Classifier) IsClusterRouterEnabled() bool {
+	return c.Config.ClusterRouter.Enabled && c.clusterRouter != nil
+}
+
+// GetClusterRouter returns the cluster router instance (may be nil if not enabled)
+func (c *Classifier) GetClusterRouter() *ClusterRouter {
+	return c.clusterRouter
+}
+
+// RouteWithClusterRouter routes a query to the best model using cluster-based routing
+//
+// Parameters:
+//   - queryEmbedding: The embedding vector for the query
+//
+// Returns:
+//   - string: The name of the best model for this query
+//   - float32: Confidence score (cosine similarity to nearest cluster)
+//   - error: Non-nil if routing fails or cluster router is not enabled
+func (c *Classifier) RouteWithClusterRouter(queryEmbedding []float32) (string, float32, error) {
+	if !c.IsClusterRouterEnabled() {
+		return c.Config.DefaultModel, 0.0, fmt.Errorf("cluster router not enabled")
+	}
+
+	return c.clusterRouter.Route(queryEmbedding)
+}
+
+// RouteTextWithClusterRouter routes a query text to the best model
+// It first generates an embedding for the text, then routes based on cluster membership
+//
+// Parameters:
+//   - text: The query text
+//
+// Returns:
+//   - string: The name of the best model for this query
+//   - float32: Confidence score
+//   - error: Non-nil if routing fails
+func (c *Classifier) RouteTextWithClusterRouter(text string) (string, float32, error) {
+	if !c.IsClusterRouterEnabled() {
+		return c.Config.DefaultModel, 0.0, fmt.Errorf("cluster router not enabled")
+	}
+
+	embeddingModel := c.Config.ClusterRouter.EmbeddingModel
+	if embeddingModel == "" {
+		embeddingModel = "qwen3"
+	}
+
+	embeddingDim := c.Config.ClusterRouter.EmbeddingDim
+	if embeddingDim == 0 {
+		embeddingDim = 768
+	}
+
+	return c.clusterRouter.RouteWithText(text, embeddingModel, embeddingDim)
 }
 
 // initializeCategoryClassifier initializes the category classification model

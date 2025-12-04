@@ -119,6 +119,10 @@ type IntelligentRouting struct {
 
 	// Reasoning mode configuration
 	ReasoningConfig `yaml:",inline"`
+
+	// Cluster-based intelligent model routing configuration
+	// Uses K-means clustering to learn which models perform best for different query types
+	ClusterRouter ClusterRouterConfig `yaml:"cluster_router,omitempty"`
 }
 
 // BackendModels represents the configuration for backend models
@@ -416,6 +420,81 @@ type ToolsConfig struct {
 
 	// Fallback behavior: if true, return empty tools on failure; if false, return error
 	FallbackToEmpty bool `yaml:"fallback_to_empty"`
+}
+
+// ClusterRouterConfig represents configuration for cluster-based intelligent model routing
+//
+// This configuration controls the K-means clustering algorithm used to learn
+// patterns of which models perform best for different types of queries.
+//
+// Training Phase:
+//  1. Collect experience data: (query_embedding, model_performance_scores)
+//  2. Run K-means clustering on embeddings to find query clusters
+//  3. For each cluster, compute average model performance
+//  4. Select best model per cluster considering performance and cost (Alpha)
+//
+// Routing Phase:
+//  1. Generate embedding for new query
+//  2. Find nearest cluster center (cosine similarity)
+//  3. Return the best model for that cluster
+type ClusterRouterConfig struct {
+	// Enable cluster-based model routing
+	Enabled bool `yaml:"enabled"`
+
+	// Number of clusters for K-means clustering
+	// More clusters = finer-grained routing but may overfit
+	// Recommended: 5-20 depending on experience data size
+	// Default: 10
+	NClusters int `yaml:"n_clusters,omitempty"`
+
+	// Maximum iterations for K-means convergence
+	// Default: 100
+	MaxIterations int `yaml:"max_iterations,omitempty"`
+
+	// Cost-performance balance factor (0.0 = cost only, 1.0 = performance only)
+	// - Alpha = 1.0: Always select the best performing model regardless of cost
+	// - Alpha = 0.5: Balance performance and cost equally
+	// - Alpha = 0.0: Always select the cheapest model regardless of performance
+	// Default: 1.0 (performance only)
+	Alpha float32 `yaml:"alpha,omitempty"`
+
+	// Whether to use CPU for clustering (true) or GPU (false)
+	// GPU is faster for large experience databases
+	// Default: false (use GPU if available)
+	UseCPU bool `yaml:"use_cpu,omitempty"`
+
+	// Model costs for cost-aware routing (model_name -> relative_cost)
+	// Cost is typically based on model size (e.g., 7.0 for 7B, 14.0 for 14B)
+	// If not specified, all models are assumed to have equal cost
+	ModelCosts map[string]float32 `yaml:"model_costs,omitempty"`
+
+	// Path to the experience database file (JSON format)
+	// Experience data contains: query embeddings and model performance scores
+	// If not specified, experience must be provided programmatically
+	ExperienceDBPath string `yaml:"experience_db_path,omitempty"`
+
+	// Embedding model to use for generating query embeddings
+	// Options: "qwen3", "gemma", "auto"
+	// Default: "qwen3"
+	EmbeddingModel string `yaml:"embedding_model,omitempty"`
+
+	// Target embedding dimension (for Matryoshka representation)
+	// Options: 768, 512, 256, 128, or 0 for full dimension
+	// Default: 768
+	EmbeddingDim int `yaml:"embedding_dim,omitempty"`
+}
+
+// DefaultClusterRouterConfig returns default cluster router configuration
+func DefaultClusterRouterConfig() ClusterRouterConfig {
+	return ClusterRouterConfig{
+		Enabled:        false,
+		NClusters:      10,
+		MaxIterations:  100,
+		Alpha:          1.0, // Performance only by default
+		UseCPU:         false,
+		EmbeddingModel: "qwen3",
+		EmbeddingDim:   768,
+	}
 }
 
 // ClassifierVLLMEndpoint represents a vLLM endpoint configuration for classifiers

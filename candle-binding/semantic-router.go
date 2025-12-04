@@ -269,6 +269,54 @@ typedef struct {
 extern bool init_lora_unified_classifier(const char* intent_model_path, const char* pii_model_path, const char* security_model_path, const char* architecture, bool use_cpu);
 extern LoRABatchResult classify_batch_with_lora(const char** texts, int num_texts);
 extern void free_lora_batch_result(LoRABatchResult result);
+
+// ================================================================================================
+// Cluster-based Model Routing C declarations
+// ================================================================================================
+
+// Cluster router configuration
+typedef struct {
+    int n_clusters;       // Number of clusters for K-means
+    int max_iterations;   // Maximum iterations for K-means convergence
+    float alpha;          // Cost-performance balance (0.0 = cost only, 1.0 = performance only)
+    bool use_cpu;         // Whether to use CPU (true) or GPU (false)
+} ClusterRouterConfig;
+
+// Experience record for training (single query)
+typedef struct {
+    float* embedding;            // Pointer to embedding data
+    int embedding_len;           // Length of embedding
+    const char** model_names;    // Pointer to model names array
+    float* model_scores;         // Pointer to model scores array
+    int num_models;              // Number of models
+} ExperienceRecordFFI;
+
+// Cluster route result
+typedef struct {
+    char* model_name;    // Best model name (caller must free with free_cstring)
+    float confidence;    // Confidence score (0.0 to 1.0)
+    int cluster_id;      // Cluster ID the query was assigned to
+    bool error;          // Whether an error occurred
+} ClusterRouteResult;
+
+// Cluster router FFI functions
+extern int init_cluster_router(
+    ExperienceRecordFFI* experience_records,
+    int num_records,
+    const char** model_cost_names,
+    float* model_cost_values,
+    int num_model_costs,
+    ClusterRouterConfig* config
+);
+extern int route_query(const float* query_embedding, int embedding_len, ClusterRouteResult* result);
+extern int get_cluster_count();
+extern int is_cluster_router_initialized();
+extern int get_cluster_model_scores(int cluster_id, char** model_names_out, float* scores_out, int capacity);
+extern void free_cluster_route_result(ClusterRouteResult* result);
+
+// ================================================================================================
+// End of Cluster-based Model Routing C declarations
+// ================================================================================================
 */
 import "C"
 
@@ -2552,4 +2600,307 @@ func extractLabelAndCategories(content string) (string, []string) {
 
 // ================================================================================================
 // END OF LORA UNIFIED CLASSIFIER GO BINDINGS
+// ================================================================================================
+
+// ================================================================================================
+// CLUSTER-BASED MODEL ROUTING GO BINDINGS
+// ================================================================================================
+
+// ClusterRouterConfig represents configuration for cluster-based routing
+type ClusterRouterConfig struct {
+	// Number of clusters for K-means
+	NClusters int
+	// Maximum iterations for K-means convergence
+	MaxIterations int
+	// Cost-performance balance factor (0.0 = cost only, 1.0 = performance only)
+	Alpha float32
+	// Whether to use CPU (true) or GPU (false)
+	UseCPU bool
+}
+
+// DefaultClusterRouterConfig returns default configuration
+func DefaultClusterRouterConfig() ClusterRouterConfig {
+	return ClusterRouterConfig{
+		NClusters:     10,
+		MaxIterations: 100,
+		Alpha:         1.0, // Performance only by default
+		UseCPU:        false,
+	}
+}
+
+// ExperienceRecord represents a single query experience for training the router
+type ExperienceRecord struct {
+	// Embedding vector for the query
+	Embedding []float32
+	// Model performance scores (model_name -> score)
+	// Score is typically 1.0 for correct, 0.0 for incorrect
+	ModelScores map[string]float32
+}
+
+// ClusterRouteResult represents the result of cluster-based routing
+type ClusterRouteResult struct {
+	// Best model name for this query
+	ModelName string
+	// Confidence score (cosine similarity to nearest cluster)
+	Confidence float32
+	// Cluster ID the query was assigned to
+	ClusterID int
+}
+
+// ClusterModelScores represents model scores for a specific cluster
+type ClusterModelScores struct {
+	ClusterID   int
+	ModelScores map[string]float32
+}
+
+// InitClusterRouter initializes the cluster-based model router with experience data
+//
+// Parameters:
+//   - experienceData: Array of experience records containing embeddings and model performance scores
+//   - modelCosts: Map of model names to their relative costs (for cost-aware routing)
+//   - config: Configuration for the cluster router
+//
+// Returns:
+//   - error: Non-nil if initialization fails
+//
+// Example:
+//
+//	// Build experience data from past queries
+//	experience := []candle_binding.ExperienceRecord{
+//	    {
+//	        Embedding: []float32{0.1, 0.2, ...}, // Query embedding
+//	        ModelScores: map[string]float32{
+//	            "math": 1.0,    // Model got this query correct
+//	            "coder": 0.0,   // Model got this query wrong
+//	            "general": 1.0, // Model got this query correct
+//	        },
+//	    },
+//	    // ... more experience records
+//	}
+//
+//	modelCosts := map[string]float32{
+//	    "math": 7.0,    // 7B model
+//	    "coder": 7.0,   // 7B model
+//	    "general": 14.0, // 14B model
+//	}
+//
+//	config := candle_binding.ClusterRouterConfig{
+//	    NClusters: 10,
+//	    MaxIterations: 100,
+//	    Alpha: 0.8, // Favor performance over cost
+//	    UseCPU: false,
+//	}
+//
+//	err := candle_binding.InitClusterRouter(experience, modelCosts, config)
+func InitClusterRouter(experienceData []ExperienceRecord, modelCosts map[string]float32, config ClusterRouterConfig) error {
+	if len(experienceData) == 0 {
+		return fmt.Errorf("experience data cannot be empty")
+	}
+
+	// Prepare C config
+	cConfig := C.ClusterRouterConfig{
+		n_clusters:     C.int(config.NClusters),
+		max_iterations: C.int(config.MaxIterations),
+		alpha:          C.float(config.Alpha),
+		use_cpu:        C.bool(config.UseCPU),
+	}
+
+	// Prepare experience records
+	cRecords := make([]C.ExperienceRecordFFI, len(experienceData))
+
+	// Keep track of allocated C strings for cleanup
+	var modelNamePtrs [][]*C.char
+
+	for i, record := range experienceData {
+		if len(record.Embedding) == 0 {
+			return fmt.Errorf("experience record %d has empty embedding", i)
+		}
+
+		// Prepare embedding
+		cRecords[i].embedding = (*C.float)(unsafe.Pointer(&record.Embedding[0]))
+		cRecords[i].embedding_len = C.int(len(record.Embedding))
+
+		// Prepare model names and scores
+		numModels := len(record.ModelScores)
+		if numModels > 0 {
+			modelNames := make([]*C.char, numModels)
+			modelScores := make([]C.float, numModels)
+
+			j := 0
+			for name, score := range record.ModelScores {
+				modelNames[j] = C.CString(name)
+				modelScores[j] = C.float(score)
+				j++
+			}
+
+			cRecords[i].model_names = (**C.char)(unsafe.Pointer(&modelNames[0]))
+			cRecords[i].model_scores = (*C.float)(unsafe.Pointer(&modelScores[0]))
+			cRecords[i].num_models = C.int(numModels)
+
+			modelNamePtrs = append(modelNamePtrs, modelNames)
+		}
+	}
+
+	// Defer cleanup of model name strings
+	defer func() {
+		for _, names := range modelNamePtrs {
+			for _, name := range names {
+				C.free(unsafe.Pointer(name))
+			}
+		}
+	}()
+
+	// Prepare model costs
+	var modelCostNames []*C.char
+	var modelCostValues []C.float
+
+	for name, cost := range modelCosts {
+		modelCostNames = append(modelCostNames, C.CString(name))
+		modelCostValues = append(modelCostValues, C.float(cost))
+	}
+
+	// Defer cleanup of cost name strings
+	defer func() {
+		for _, name := range modelCostNames {
+			C.free(unsafe.Pointer(name))
+		}
+	}()
+
+	var costNamesPtr **C.char
+	var costValuesPtr *C.float
+	numCosts := len(modelCosts)
+
+	if numCosts > 0 {
+		costNamesPtr = (**C.char)(unsafe.Pointer(&modelCostNames[0]))
+		costValuesPtr = (*C.float)(unsafe.Pointer(&modelCostValues[0]))
+	}
+
+	// Call C function
+	result := C.init_cluster_router(
+		(*C.ExperienceRecordFFI)(unsafe.Pointer(&cRecords[0])),
+		C.int(len(experienceData)),
+		costNamesPtr,
+		costValuesPtr,
+		C.int(numCosts),
+		&cConfig,
+	)
+
+	if result != 0 {
+		return fmt.Errorf("failed to initialize cluster router (error code: %d)", result)
+	}
+
+	log.Printf("Cluster router initialized with %d clusters, %d experience records", config.NClusters, len(experienceData))
+	return nil
+}
+
+// RouteQuery routes a query to the best model based on cluster membership
+//
+// Parameters:
+//   - queryEmbedding: Embedding vector for the query
+//
+// Returns:
+//   - *ClusterRouteResult: Routing result with model name, confidence, and cluster ID
+//   - error: Non-nil if routing fails
+//
+// Example:
+//
+//	// Get query embedding using GetEmbeddingWithModelType or similar
+//	embedding, err := candle_binding.GetEmbeddingWithModelType("What is 2+2?", "qwen3", 768)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Route to best model
+//	result, err := candle_binding.RouteQuery(embedding.Embedding)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	fmt.Printf("Route to model: %s (cluster: %d, confidence: %.3f)\n",
+//	    result.ModelName, result.ClusterID, result.Confidence)
+func RouteQuery(queryEmbedding []float32) (*ClusterRouteResult, error) {
+	if len(queryEmbedding) == 0 {
+		return nil, fmt.Errorf("query embedding cannot be empty")
+	}
+
+	var cResult C.ClusterRouteResult
+	status := C.route_query(
+		(*C.float)(unsafe.Pointer(&queryEmbedding[0])),
+		C.int(len(queryEmbedding)),
+		&cResult,
+	)
+
+	defer C.free_cluster_route_result(&cResult)
+
+	if status != 0 || cResult.error {
+		return nil, fmt.Errorf("failed to route query (status: %d)", status)
+	}
+
+	result := &ClusterRouteResult{
+		ModelName:  C.GoString(cResult.model_name),
+		Confidence: float32(cResult.confidence),
+		ClusterID:  int(cResult.cluster_id),
+	}
+
+	return result, nil
+}
+
+// GetClusterCount returns the number of clusters in the trained router
+//
+// Returns:
+//   - int: Number of clusters, or -1 if not initialized
+func GetClusterCount() int {
+	return int(C.get_cluster_count())
+}
+
+// IsClusterRouterInitialized checks if the cluster router has been initialized
+//
+// Returns:
+//   - bool: True if initialized, false otherwise
+func IsClusterRouterInitialized() bool {
+	return C.is_cluster_router_initialized() == 1
+}
+
+// GetClusterModelScores returns the model performance scores for a specific cluster
+//
+// Parameters:
+//   - clusterID: The cluster ID to query
+//
+// Returns:
+//   - map[string]float32: Model names to average performance scores
+//   - error: Non-nil if the query fails
+func GetClusterModelScores(clusterID int) (map[string]float32, error) {
+	if !IsClusterRouterInitialized() {
+		return nil, fmt.Errorf("cluster router not initialized")
+	}
+
+	// Allocate buffers for results
+	const maxModels = 100
+	modelNames := make([]*C.char, maxModels)
+	scores := make([]C.float, maxModels)
+
+	count := C.get_cluster_model_scores(
+		C.int(clusterID),
+		(**C.char)(unsafe.Pointer(&modelNames[0])),
+		(*C.float)(unsafe.Pointer(&scores[0])),
+		C.int(maxModels),
+	)
+
+	if count < 0 {
+		return nil, fmt.Errorf("failed to get cluster model scores for cluster %d", clusterID)
+	}
+
+	// Build result map and free C strings
+	result := make(map[string]float32)
+	for i := 0; i < int(count); i++ {
+		name := C.GoString(modelNames[i])
+		result[name] = float32(scores[i])
+		C.free(unsafe.Pointer(modelNames[i]))
+	}
+
+	return result, nil
+}
+
+// ================================================================================================
+// END OF CLUSTER-BASED MODEL ROUTING GO BINDINGS
 // ================================================================================================
