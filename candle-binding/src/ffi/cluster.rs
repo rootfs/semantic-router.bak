@@ -4,9 +4,12 @@
 //! It learns model performance patterns from experience data and routes
 //! new queries to the optimal model based on semantic similarity.
 
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::Path;
 use std::sync::OnceLock;
 
 /// Global singleton for cluster router state
@@ -797,6 +800,258 @@ pub extern "C" fn free_cluster_route_result(result: *mut ClusterRouteResult) {
         if !res.model_name.is_null() {
             let _ = CString::from_raw(res.model_name);
             res.model_name = std::ptr::null_mut();
+        }
+    }
+}
+
+// ============================================================================
+// Model Export/Import Functions
+// ============================================================================
+
+/// Metadata structure for cluster router export (serialized as JSON)
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ClusterRouterMetadata {
+    /// Format version for compatibility
+    version: u32,
+    /// Number of clusters
+    n_clusters: usize,
+    /// Embedding dimension
+    embedding_dim: usize,
+    /// Top-k clusters to consider
+    top_k: usize,
+    /// Softmax temperature
+    beta: f32,
+    /// Cost-performance balance
+    alpha: f32,
+    /// Available model names
+    model_names: Vec<String>,
+    /// Model costs
+    model_costs: HashMap<String, f32>,
+    /// Cluster rankings (cluster_id -> sorted model names)
+    cluster_rankings: Vec<Vec<String>>,
+    /// Best model per cluster
+    cluster_best_model: Vec<String>,
+    /// Model scores per cluster
+    cluster_model_scores: Vec<HashMap<String, f32>>,
+}
+
+const CLUSTER_ROUTER_FORMAT_VERSION: u32 = 1;
+
+/// Export trained cluster router to directory
+///
+/// Creates two files:
+/// - {path}/metadata.json: Configuration, rankings, and model info
+/// - {path}/cluster_centers.bin: Raw float32 tensor data
+fn export_cluster_router_to_dir(state: &ClusterRouterState, dir_path: &str) -> Result<(), String> {
+    // Create directory if it doesn't exist
+    fs::create_dir_all(dir_path)
+        .map_err(|e| format!("Failed to create directory {}: {:?}", dir_path, e))?;
+
+    // Export metadata as JSON
+    let metadata = ClusterRouterMetadata {
+        version: CLUSTER_ROUTER_FORMAT_VERSION,
+        n_clusters: state.n_clusters,
+        embedding_dim: state.embedding_dim,
+        top_k: state.top_k,
+        beta: state.beta,
+        alpha: state.alpha,
+        model_names: state.model_names.clone(),
+        model_costs: state.model_costs.clone(),
+        cluster_rankings: state.cluster_model_rankings.clone(),
+        cluster_best_model: state.cluster_best_model.clone(),
+        cluster_model_scores: state.cluster_model_scores.clone(),
+    };
+
+    let metadata_path = Path::new(dir_path).join("metadata.json");
+    let metadata_file = File::create(&metadata_path)
+        .map_err(|e| format!("Failed to create metadata file: {:?}", e))?;
+    let writer = BufWriter::new(metadata_file);
+    serde_json::to_writer_pretty(writer, &metadata)
+        .map_err(|e| format!("Failed to write metadata: {:?}", e))?;
+
+    // Export cluster centers as raw binary (f32 little-endian)
+    let centers_data: Vec<f32> = state
+        .cluster_centers
+        .to_vec2::<f32>()
+        .map_err(|e| format!("Failed to convert cluster centers: {:?}", e))?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let centers_path = Path::new(dir_path).join("cluster_centers.bin");
+    let mut centers_file = File::create(&centers_path)
+        .map_err(|e| format!("Failed to create centers file: {:?}", e))?;
+
+    // Write as little-endian f32
+    for &val in &centers_data {
+        centers_file
+            .write_all(&val.to_le_bytes())
+            .map_err(|e| format!("Failed to write center data: {:?}", e))?;
+    }
+
+    println!(
+        "INFO: Exported cluster router to {} ({} clusters, {} dim, {} bytes)",
+        dir_path,
+        state.n_clusters,
+        state.embedding_dim,
+        centers_data.len() * 4
+    );
+    Ok(())
+}
+
+/// Import cluster router from directory
+fn import_cluster_router_from_dir(dir_path: &str, device: &Device) -> Result<ClusterRouterState, String> {
+    // Load metadata
+    let metadata_path = Path::new(dir_path).join("metadata.json");
+    let metadata_file = File::open(&metadata_path)
+        .map_err(|e| format!("Failed to open metadata file: {:?}", e))?;
+    let reader = BufReader::new(metadata_file);
+    let metadata: ClusterRouterMetadata = serde_json::from_reader(reader)
+        .map_err(|e| format!("Failed to parse metadata: {:?}", e))?;
+
+    // Check version
+    if metadata.version != CLUSTER_ROUTER_FORMAT_VERSION {
+        return Err(format!(
+            "Unsupported format version {} (expected {})",
+            metadata.version, CLUSTER_ROUTER_FORMAT_VERSION
+        ));
+    }
+
+    // Load cluster centers
+    let centers_path = Path::new(dir_path).join("cluster_centers.bin");
+    let mut centers_file = File::open(&centers_path)
+        .map_err(|e| format!("Failed to open centers file: {:?}", e))?;
+
+    let expected_size = metadata.n_clusters * metadata.embedding_dim * 4;
+    let mut centers_bytes = vec![0u8; expected_size];
+    centers_file
+        .read_exact(&mut centers_bytes)
+        .map_err(|e| format!("Failed to read centers data: {:?}", e))?;
+
+    // Convert to f32
+    let centers_data: Vec<f32> = centers_bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+
+    let cluster_centers = Tensor::from_slice(
+        &centers_data,
+        (metadata.n_clusters, metadata.embedding_dim),
+        device,
+    )
+    .map_err(|e| format!("Failed to create cluster centers tensor: {:?}", e))?;
+
+    Ok(ClusterRouterState {
+        cluster_centers,
+        cluster_best_model: metadata.cluster_best_model,
+        cluster_model_scores: metadata.cluster_model_scores,
+        cluster_model_rankings: metadata.cluster_rankings,
+        model_costs: metadata.model_costs,
+        model_names: metadata.model_names,
+        embedding_dim: metadata.embedding_dim,
+        n_clusters: metadata.n_clusters,
+        top_k: metadata.top_k,
+        beta: metadata.beta,
+        alpha: metadata.alpha,
+        device: device.clone(),
+    })
+}
+
+/// Export trained cluster router to directory (FFI)
+///
+/// Creates:
+/// - {dir_path}/metadata.json: Configuration and rankings
+/// - {dir_path}/cluster_centers.bin: Raw float32 tensor
+///
+/// # Safety
+/// - `dir_path` must be a valid null-terminated C string
+///
+/// # Returns
+/// 0 on success, -1 on error
+#[no_mangle]
+pub extern "C" fn export_cluster_router(dir_path: *const c_char) -> i32 {
+    if dir_path.is_null() {
+        eprintln!("Error: null path passed to export_cluster_router");
+        return -1;
+    }
+
+    let path_str = match unsafe { CStr::from_ptr(dir_path).to_str() } {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: invalid path string: {:?}", e);
+            return -1;
+        }
+    };
+
+    let state = match CLUSTER_ROUTER_STATE.get() {
+        Some(s) => s,
+        None => {
+            eprintln!("Error: Cluster router not initialized");
+            return -1;
+        }
+    };
+
+    match export_cluster_router_to_dir(state, path_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Error: Failed to export cluster router: {}", e);
+            -1
+        }
+    }
+}
+
+/// Import cluster router from directory (FFI)
+///
+/// Loads a previously exported cluster router and makes it ready for routing.
+/// Expects:
+/// - {dir_path}/metadata.json
+/// - {dir_path}/cluster_centers.bin
+///
+/// # Safety
+/// - `dir_path` must be a valid null-terminated C string
+///
+/// # Returns
+/// 0 on success, -1 on error
+#[no_mangle]
+pub extern "C" fn import_cluster_router(dir_path: *const c_char, use_cpu: bool) -> i32 {
+    if dir_path.is_null() {
+        eprintln!("Error: null path passed to import_cluster_router");
+        return -1;
+    }
+
+    let path_str = match unsafe { CStr::from_ptr(dir_path).to_str() } {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: invalid path string: {:?}", e);
+            return -1;
+        }
+    };
+
+    let device = if use_cpu {
+        Device::Cpu
+    } else {
+        Device::cuda_if_available(0).unwrap_or(Device::Cpu)
+    };
+
+    match import_cluster_router_from_dir(path_str, &device) {
+        Ok(state) => {
+            let n_clusters = state.n_clusters;
+            let embedding_dim = state.embedding_dim;
+            
+            if CLUSTER_ROUTER_STATE.set(state).is_err() {
+                eprintln!("Warning: Cluster router already initialized, cannot import");
+                return -1;
+            }
+            
+            println!(
+                "INFO: Imported cluster router from {} ({} clusters, {} dim)",
+                path_str, n_clusters, embedding_dim
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("Error: Failed to import cluster router: {}", e);
+            -1
         }
     }
 }

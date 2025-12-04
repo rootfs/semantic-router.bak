@@ -315,6 +315,8 @@ extern int get_cluster_count();
 extern int is_cluster_router_initialized();
 extern int get_cluster_model_scores(int cluster_id, char** model_names_out, float* scores_out, int capacity);
 extern void free_cluster_route_result(ClusterRouteResult* result);
+extern int export_cluster_router(const char* path);
+extern int import_cluster_router(const char* path, bool use_cpu);
 
 // ================================================================================================
 // End of Cluster-based Model Routing C declarations
@@ -2920,6 +2922,89 @@ func GetClusterModelScores(clusterID int) (map[string]float32, error) {
 	}
 
 	return result, nil
+}
+
+// ExportClusterRouter exports the trained cluster router to a directory
+//
+// Creates two files:
+// - {dirPath}/metadata.json: Configuration, rankings, and model info (human readable)
+// - {dirPath}/cluster_centers.bin: Raw float32 tensor data (compact binary)
+//
+// Parameters:
+//   - dirPath: Directory path to save the model (e.g., "models/cluster_router")
+//
+// Returns:
+//   - error: Non-nil if export fails
+//
+// Example:
+//
+//	err := candle_binding.ExportClusterRouter("models/cluster_router")
+//	if err != nil {
+//	    log.Fatalf("Failed to export: %v", err)
+//	}
+//
+// Directory structure after export:
+//
+//	models/cluster_router/
+//	├── metadata.json          # Human-readable config and rankings
+//	└── cluster_centers.bin    # Binary tensor [n_clusters, embedding_dim]
+func ExportClusterRouter(dirPath string) error {
+	if !IsClusterRouterInitialized() {
+		return fmt.Errorf("cluster router not initialized")
+	}
+
+	cPath := C.CString(dirPath)
+	defer C.free(unsafe.Pointer(cPath))
+
+	status := C.export_cluster_router(cPath)
+	if status != 0 {
+		return fmt.Errorf("failed to export cluster router to %s", dirPath)
+	}
+
+	return nil
+}
+
+// ImportClusterRouter imports a cluster router from a directory
+//
+// This loads a previously exported cluster router and makes it ready for routing.
+// After import, you can immediately use RouteQuery without calling InitClusterRouter.
+//
+// Expected directory structure:
+//
+//	{dirPath}/
+//	├── metadata.json          # Configuration and rankings
+//	└── cluster_centers.bin    # Binary tensor data
+//
+// Parameters:
+//   - dirPath: Directory path containing the exported model
+//   - useCPU: Whether to use CPU (true) or GPU (false) for routing
+//
+// Returns:
+//   - error: Non-nil if import fails
+//
+// Example:
+//
+//	err := candle_binding.ImportClusterRouter("models/cluster_router", false)
+//	if err != nil {
+//	    log.Fatalf("Failed to import: %v", err)
+//	}
+//
+//	// Now ready to route queries
+//	result, err := candle_binding.RouteQuery(embedding)
+func ImportClusterRouter(dirPath string, useCPU bool) error {
+	if IsClusterRouterInitialized() {
+		return fmt.Errorf("cluster router already initialized, cannot import")
+	}
+
+	cPath := C.CString(dirPath)
+	defer C.free(unsafe.Pointer(cPath))
+
+	status := C.import_cluster_router(cPath, C.bool(useCPU))
+	if status != 0 {
+		return fmt.Errorf("failed to import cluster router from %s", dirPath)
+	}
+
+	return nil
 }
 
 // ================================================================================================
