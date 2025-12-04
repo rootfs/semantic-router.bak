@@ -4,7 +4,7 @@
 //! It learns model performance patterns from experience data and routes
 //! new queries to the optimal model based on semantic similarity.
 
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
 use std::fs::{self, File};
@@ -305,7 +305,7 @@ fn route_with_topk_aggregation(
     }
 
     // Find best model
-    let (best_model, best_score) = model_scores
+    let (best_model, _best_score) = model_scores
         .iter()
         .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(m, s)| (m.clone(), *s))
