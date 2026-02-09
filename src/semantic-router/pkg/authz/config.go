@@ -11,7 +11,39 @@ import (
 
 // AuthConfig represents the top-level auth tokens configuration file.
 type AuthConfig struct {
-	Tokens []TokenEntry `yaml:"tokens"`
+	Tokens        []TokenEntry   `yaml:"tokens"`
+	OIDCProviders []OIDCProvider `yaml:"oidc_providers,omitempty"`
+}
+
+// OIDCProvider configures an external OIDC / OAuth2 identity provider.
+// Tokens not found in the static store are validated by calling the
+// provider's userinfo endpoint with the bearer token.
+type OIDCProvider struct {
+	// Name identifies this provider (e.g. "github", "google").
+	Name string `yaml:"name"`
+	// UserinfoEndpoint is called with the bearer token to retrieve user claims.
+	// For GitHub: https://api.github.com/user
+	UserinfoEndpoint string `yaml:"userinfo_endpoint"`
+	// UserIDClaim is the JSON field in the userinfo response used as the user identity.
+	// For GitHub: "login" (username). For Google: "email".
+	UserIDClaim string `yaml:"user_id_claim"`
+	// TokenCacheTTL controls how long a validated token is cached (e.g. "5m", "1h").
+	// Default: 5m.
+	TokenCacheTTL string `yaml:"token_cache_ttl,omitempty"`
+	// UserMappings maps OIDC user identities to provider API keys.
+	// A mapping with user_id "*" acts as a wildcard for any authenticated user.
+	UserMappings []OIDCUserMapping `yaml:"user_mappings"`
+}
+
+// OIDCUserMapping maps an OIDC user identity to provider API keys.
+type OIDCUserMapping struct {
+	// UserID is the value of the UserIDClaim that this mapping matches.
+	// Use "*" as a wildcard to match any authenticated user.
+	UserID string `yaml:"user_id"`
+	// Description is a human-readable label for this mapping.
+	Description string `yaml:"description,omitempty"`
+	// APIKeys maps provider names to their API keys (same as TokenEntry).
+	APIKeys map[string]string `yaml:"api_keys"`
 }
 
 // TokenEntry represents a single user's token mapping.

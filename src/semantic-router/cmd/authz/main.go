@@ -25,10 +25,16 @@ func main() {
 	}
 
 	store := authz.NewTokenStore(cfg)
-	log.Printf("Loaded %d user tokens from %s", store.TokenCount(), *configPath)
+	log.Printf("Loaded %d static token(s) from %s", store.TokenCount(), *configPath)
+
+	// Initialise OIDC validator if providers are configured.
+	oidc := authz.NewOIDCValidator(cfg.OIDCProviders)
+	if oidc != nil {
+		log.Printf("Loaded %d OIDC provider(s) from %s", oidc.ProviderCount(), *configPath)
+	}
 
 	// Start server
-	server := authz.NewServer(store, *addr)
+	server := authz.NewServer(store, oidc, *addr)
 	if err := server.Start(); err != nil {
 		log.Fatalf("ext_authz server failed: %v", err)
 	}

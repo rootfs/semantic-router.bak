@@ -20,13 +20,16 @@ const (
 // It validates user bearer tokens and injects provider API keys as headers.
 type Server struct {
 	store *TokenStore
+	oidc  *OIDCValidator // optional — nil disables OIDC
 	addr  string
 }
 
 // NewServer creates a new ext_authz HTTP server.
-func NewServer(store *TokenStore, addr string) *Server {
+// Pass nil for oidc to disable OIDC validation.
+func NewServer(store *TokenStore, oidc *OIDCValidator, addr string) *Server {
 	return &Server{
 		store: store,
+		oidc:  oidc,
 		addr:  addr,
 	}
 }
@@ -43,7 +46,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/", s.handleCheck)
 	mux.HandleFunc("/healthz", s.handleHealth)
 
-	log.Printf("[ext_authz] Starting on %s with %d configured tokens", s.addr, s.store.TokenCount())
+	oidcInfo := ""
+	if s.oidc != nil {
+		oidcInfo = fmt.Sprintf(" + %d OIDC provider(s)", s.oidc.ProviderCount())
+	}
+	log.Printf("[ext_authz] Starting on %s with %d static token(s)%s", s.addr, s.store.TokenCount(), oidcInfo)
 	return http.ListenAndServe(s.addr, mux)
 }
 
@@ -74,8 +81,11 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up token in the store
+	// Look up token — try static store first, then OIDC providers.
 	entry := s.store.Lookup(token)
+	if entry == nil && s.oidc != nil {
+		entry = s.oidc.Validate(token)
+	}
 	if entry == nil {
 		log.Printf("[ext_authz] DENIED: unknown token (prefix: %s...)", safePrefix(token, 8))
 		s.denyRequest(w, http.StatusForbidden, "Invalid access token")
