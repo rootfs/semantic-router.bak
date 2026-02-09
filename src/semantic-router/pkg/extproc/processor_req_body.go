@@ -201,10 +201,13 @@ func (r *OpenAIRouter) handleAnthropicRouting(openAIRequest *openai.ChatCompleti
 		return r.createErrorResponse(400, "Streaming is not supported for Anthropic models. Please set stream=false in your request."), nil
 	}
 
-	// Get API key for the model
-	accessKey := r.Config.GetModelAccessKey(targetModel)
+	// Get API key for the model: prefer per-user key from ext_authz, fall back to static config
+	accessKey := ctx.UserAnthropicKey
 	if accessKey == "" {
-		logging.Errorf("No access_key configured for Anthropic model: %s", targetModel)
+		accessKey = r.Config.GetModelAccessKey(targetModel)
+	}
+	if accessKey == "" {
+		logging.Errorf("No API key available for Anthropic model: %s (neither ext_authz nor access_key configured)", targetModel)
 		return r.createErrorResponse(500, fmt.Sprintf("No API key configured for model: %s", targetModel)), nil
 	}
 
@@ -255,6 +258,10 @@ func (r *OpenAIRouter) handleAnthropicRouting(openAIRequest *openai.ChatCompleti
 
 	logging.Infof("Transformed request for Anthropic API, body size: %d bytes", len(anthropicBody))
 
+	// Build list of headers to remove: standard Anthropic removals plus ext_authz injected keys
+	headersToRemove := anthropic.HeadersToRemove()
+	headersToRemove = append(headersToRemove, headers.UserOpenAIKey, headers.UserAnthropicKey)
+
 	// Return response with body and header mutations - let Envoy route to Anthropic
 	// ClearRouteCache forces Envoy to re-evaluate routing after we set x-selected-model header
 	return &ext_proc.ProcessingResponse{
@@ -265,7 +272,7 @@ func (r *OpenAIRouter) handleAnthropicRouting(openAIRequest *openai.ChatCompleti
 					ClearRouteCache: true,
 					HeaderMutation: &ext_proc.HeaderMutation{
 						SetHeaders:    setHeaders,
-						RemoveHeaders: anthropic.HeadersToRemove(),
+						RemoveHeaders: headersToRemove,
 					},
 					BodyMutation: &ext_proc.BodyMutation{
 						Mutation: &ext_proc.BodyMutation_Body{
@@ -489,8 +496,12 @@ func (r *OpenAIRouter) createRoutingResponse(model string, endpoint string, modi
 	traceContextHeaders := r.startUpstreamSpanAndInjectHeaders(model, endpoint, ctx)
 	setHeaders = append(setHeaders, traceContextHeaders...)
 
-	// Add Authorization header if model has access_key configured
-	if accessKey := r.getModelAccessKey(model); accessKey != "" {
+	// Add Authorization header: prefer per-user key from ext_authz, fall back to static access_key
+	accessKey := ctx.UserOpenAIKey
+	if accessKey == "" {
+		accessKey = r.getModelAccessKey(model)
+	}
+	if accessKey != "" {
 		setHeaders = append(setHeaders, &core.HeaderValueOption{
 			Header: &core.HeaderValue{
 				Key:      "Authorization",
@@ -528,6 +539,9 @@ func (r *OpenAIRouter) createRoutingResponse(model string, endpoint string, modi
 		})
 		logging.Infof("Response API: Rewriting path to /v1/chat/completions")
 	}
+
+	// Strip ext_authz injected headers from upstream request (prevent key leakage)
+	removeHeaders = append(removeHeaders, headers.UserOpenAIKey, headers.UserAnthropicKey)
 
 	// Apply header mutations from decision's header_mutation plugin
 	if ctx.VSRSelectedDecision != nil {
@@ -569,12 +583,16 @@ func (r *OpenAIRouter) createSpecifiedModelResponse(model string, endpoint strin
 	traceContextHeaders := r.startUpstreamSpanAndInjectHeaders(model, endpoint, ctx)
 	setHeaders = append(setHeaders, traceContextHeaders...)
 
-	// Add Authorization header if model has access_key configured
-	if accessKey := r.getModelAccessKey(model); accessKey != "" {
+	// Add Authorization header: prefer per-user key from ext_authz, fall back to static access_key
+	specAccessKey := ctx.UserOpenAIKey
+	if specAccessKey == "" {
+		specAccessKey = r.getModelAccessKey(model)
+	}
+	if specAccessKey != "" {
 		setHeaders = append(setHeaders, &core.HeaderValueOption{
 			Header: &core.HeaderValue{
 				Key:      "Authorization",
-				RawValue: []byte(fmt.Sprintf("Bearer %s", accessKey)),
+				RawValue: []byte(fmt.Sprintf("Bearer %s", specAccessKey)),
 			},
 		})
 		logging.Infof("Added Authorization header for model %s", model)
@@ -595,6 +613,9 @@ func (r *OpenAIRouter) createSpecifiedModelResponse(model string, endpoint strin
 			RawValue: []byte(model),
 		},
 	})
+
+	// Strip ext_authz injected headers from upstream request (prevent key leakage)
+	removeHeaders = append(removeHeaders, headers.UserOpenAIKey, headers.UserAnthropicKey)
 
 	// For Response API requests, modify :path to /v1/chat/completions and use translated body
 	var bodyMutation *ext_proc.BodyMutation

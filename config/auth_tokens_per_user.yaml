@@ -1,0 +1,20 @@
+# ═══════════════════════════════════════════════════════════
+# Pattern 2 — Admin Per-User (1:N)
+# ═══════════════════════════════════════════════════════════
+#
+# Admin assigns each user a LOCAL access token and provisions
+# separate provider API keys for that user.
+# The user never sees the provider keys.
+#
+# Use-case: enterprise per-user billing, audit trail,
+#           per-user rate limits at the provider level.
+# ═══════════════════════════════════════════════════════════
+
+tokens:
+  # Alice gets a local token.  Admin created dedicated
+  # OpenAI and Anthropic keys just for her.
+  - access_token: "sr-alice-local-token-7890"
+    description: "Alice (1:N) — admin-managed provider keys"
+    api_keys:
+      openai: "sk-proj-alice-dedicated-openai-key"
+      anthropic: "sk-ant-alice-dedicated-anthropic-key"

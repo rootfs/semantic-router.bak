@@ -1,0 +1,52 @@
+# ═══════════════════════════════════════════════════════════════
+# Authentication Token Configuration - Three Access Patterns
+# ═══════════════════════════════════════════════════════════════
+#
+# Pattern 1 (1:1) BYOT  — Bring Your Own Token
+#   User's access token IS their own provider key.
+#   ext_authz passes the same key to the provider.
+#
+# Pattern 2 (1:N) Admin-managed per-user
+#   Admin assigns a local token to one user and maps it
+#   to separate OpenAI + Anthropic provider keys.
+#
+# Pattern 3 (N:1) Shared provider keys
+#   Multiple users each get a unique local token, but all
+#   map to the SAME shared provider keys (cost pooling).
+# ═══════════════════════════════════════════════════════════════
+
+tokens:
+
+  # ── Pattern 1: BYOT (1:1) ──────────────────────────────────
+  # Developer brings their own OpenAI key as the access token.
+  # The ext_authz maps it directly — the access_token value
+  # appears as the provider key.
+  - access_token: "sk-byot-user-own-openai-key-abc123"
+    description: "BYOT Developer (1:1) — brings own key"
+    api_keys:
+      openai: "sk-byot-user-own-openai-key-abc123"
+      anthropic: "sk-ant-byot-user-own-anthropic-key-xyz"
+
+  # ── Pattern 2: Admin-managed per-user (1:N) ────────────────
+  # Alice gets a local token; admin provisions separate
+  # provider keys for her.
+  - access_token: "sr-alice-local-token-7890"
+    description: "Alice (1:N) — admin-managed provider keys"
+    api_keys:
+      openai: "sk-proj-alice-dedicated-openai-key"
+      anthropic: "sk-ant-alice-dedicated-anthropic-key"
+
+  # ── Pattern 3: Shared provider keys (N:1) ──────────────────
+  # Bob and Carol each have unique local tokens, but both
+  # map to the same shared team provider keys.
+  - access_token: "sr-bob-team-token-1111"
+    description: "Bob (N:1) — shared team provider keys"
+    api_keys:
+      openai: "sk-proj-shared-team-openai-key-TEAM"
+      anthropic: "sk-ant-shared-team-anthropic-key-TEAM"
+
+  - access_token: "sr-carol-team-token-2222"
+    description: "Carol (N:1) — shared team provider keys"
+    api_keys:
+      openai: "sk-proj-shared-team-openai-key-TEAM"
+      anthropic: "sk-ant-shared-team-anthropic-key-TEAM"

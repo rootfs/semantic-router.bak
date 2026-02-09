@@ -1,0 +1,20 @@
+# ═══════════════════════════════════════════════════════════
+# Pattern 1 — BYOT: Bring Your Own Token (1:1)
+# ═══════════════════════════════════════════════════════════
+#
+# The user's access token IS their own provider API key.
+# ext_authz recognises it and passes the same key through
+# to OpenAI / Anthropic — zero admin overhead.
+#
+# Use-case: developer self-service, personal API keys,
+#           pay-per-own-usage billing.
+# ═══════════════════════════════════════════════════════════
+
+tokens:
+  # Developer "Dave" uses his own OpenAI key as the bearer token.
+  # ext_authz maps it 1:1 — the provider receives the exact same key.
+  - access_token: "sk-byot-dave-own-openai-key-abc123"
+    description: "Dave (BYOT) — uses own provider keys"
+    api_keys:
+      openai: "sk-byot-dave-own-openai-key-abc123"
+      anthropic: "sk-ant-byot-dave-own-anthropic-key-xyz"

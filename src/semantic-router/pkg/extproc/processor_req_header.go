@@ -128,6 +128,11 @@ type RequestContext struct {
 	// Empty string means standard OpenAI-compatible backend (no transformation needed)
 	APIFormat string
 
+	// Per-user provider API keys injected by ext_authz
+	// These take precedence over static access_key in model config when present.
+	UserOpenAIKey    string // OpenAI API key for the authenticated user
+	UserAnthropicKey string // Anthropic API key for the authenticated user
+
 	// RAG (Retrieval-Augmented Generation) tracking
 	RAGRetrievedContext string  // Retrieved context from RAG plugin
 	RAGBackend          string  // Backend used for retrieval ("milvus", "external_api", "mcp", "hybrid")
@@ -183,6 +188,15 @@ func (r *OpenAIRouter) handleRequestHeaders(v *ext_proc.ProcessingRequest_Reques
 		if h.Key == headers.VSRLooperRequest && headerValue == "true" {
 			ctx.LooperRequest = true
 			logging.Infof("Detected looper internal request, will skip plugin processing")
+		}
+		// Capture per-user API keys injected by ext_authz
+		if h.Key == headers.UserOpenAIKey && headerValue != "" {
+			ctx.UserOpenAIKey = headerValue
+			logging.Debugf("Received per-user OpenAI API key from ext_authz")
+		}
+		if h.Key == headers.UserAnthropicKey && headerValue != "" {
+			ctx.UserAnthropicKey = headerValue
+			logging.Debugf("Received per-user Anthropic API key from ext_authz")
 		}
 	}
 

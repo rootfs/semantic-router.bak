@@ -1,0 +1,26 @@
+# ═══════════════════════════════════════════════════════════
+# Pattern 3 — Shared Provider Keys (N:1)
+# ═══════════════════════════════════════════════════════════
+#
+# Multiple users each receive a unique local access token,
+# but ALL map to the SAME shared provider API keys.
+# Admin manages one set of provider keys for the whole team.
+#
+# Use-case: team/org cost pooling, centralised billing,
+#           shared API quota, simple on-boarding.
+# ═══════════════════════════════════════════════════════════
+
+tokens:
+  # Bob — unique local token, shared provider keys
+  - access_token: "sr-bob-team-token-1111"
+    description: "Bob (N:1) — shared team provider keys"
+    api_keys:
+      openai: "sk-proj-shared-team-openai-key-TEAM"
+      anthropic: "sk-ant-shared-team-anthropic-key-TEAM"
+
+  # Carol — different local token, SAME provider keys as Bob
+  - access_token: "sr-carol-team-token-2222"
+    description: "Carol (N:1) — shared team provider keys"
+    api_keys:
+      openai: "sk-proj-shared-team-openai-key-TEAM"
+      anthropic: "sk-ant-shared-team-anthropic-key-TEAM"
