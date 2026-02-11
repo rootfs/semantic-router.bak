@@ -86,6 +86,7 @@ type RequestContext struct {
 	VSRContextTokenCount   int      // Actual token count for the request
 	VSRMatchedComplexity   []string // Matched complexity rules with difficulty level (e.g. "code_complexity:hard")
 	VSRMatchedModality     []string // Matched modality signals: "AR", "DIFFUSION", or "BOTH"
+	VSRMatchedAuthz        []string // Matched authz rule names for user-level routing
 
 	// Endpoint tracking for windowed metrics
 	SelectedEndpoint string // The endpoint address selected for this request

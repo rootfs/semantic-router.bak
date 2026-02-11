@@ -70,6 +70,7 @@ type SignalMatches struct {
 	ContextRules      []string // Context rule names matched (e.g. "low_token_count")
 	ComplexityRules   []string // Complexity rules with difficulty level (e.g. "code_complexity:hard")
 	ModalityRules     []string // Modality classification: "AR", "DIFFUSION", or "BOTH"
+	AuthzRules        []string // Authz rule names matched for user-level routing (e.g. "premium_tier")
 }
 
 // DecisionResult represents the result of decision evaluation
@@ -195,6 +196,8 @@ func (e *DecisionEngine) evaluateRuleCombinationWithSignals(
 			conditionMatched = slices.Contains(signals.ComplexityRules, condition.Name)
 		case "modality":
 			conditionMatched = slices.Contains(signals.ModalityRules, condition.Name)
+		case "authz":
+			conditionMatched = slices.Contains(signals.AuthzRules, condition.Name)
 		default:
 			continue
 		}
