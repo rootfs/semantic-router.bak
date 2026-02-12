@@ -1,0 +1,168 @@
+# Authorino RBAC Demo — User/Group-Based Model Tier Routing
+#
+# Routes purely by WHO the user is, not what they ask.
+# Same physical model on two endpoints; the router picks the endpoint
+# based on Authorino-injected identity (user ID + group membership).
+#
+# Architecture:
+#   Client (Bearer token) → Envoy :8801
+#     → ext_authz (Authorino :50052) validates token, injects identity headers
+#     → ext_proc  (Router :50051)    matches RBAC role_bindings → picks tier
+#     → ORIGINAL_DST → vLLM (:8000 admin tier | :8001 free tier)
+#
+# Identity headers injected by Authorino:
+#   x-authz-user-id     ← K8s Secret metadata.name (e.g., "user-admin")
+#   x-authz-user-groups ← K8s Secret annotation "authz-groups" (e.g., "premium")
+#
+# RBAC tier mapping:
+#   user-admin / (User match)    → admin        → qwen14b-admin (:8100)
+#   bob        / premium         → premium_user → qwen14b-admin (:8100)
+#   alice      / engineering     → pro_user     → qwen14b-free  (:8200)
+#   carol      / free            → free_user    → qwen14b-free  (:8200)
+#   dave       / contractor      → free_user    → qwen14b-free  (:8200)
+#   unknown    / (no match)      → default      → qwen14b-free  (:8200)
+
+# --------------------------------------------------------------------------
+# Authz — Authorino-injected identity headers
+# --------------------------------------------------------------------------
+authz:
+  fail_open: true
+  identity:
+    user_id_header: "x-authz-user-id"
+    user_groups_header: "x-authz-user-groups"
+
+# --------------------------------------------------------------------------
+# Endpoints — two vLLM instances, same model, different tiers
+# --------------------------------------------------------------------------
+vllm_endpoints:
+  - name: "vllm-14b-admin"
+    address: "127.0.0.1"
+    port: 8100
+    weight: 1
+    type: "vllm"
+
+  - name: "vllm-14b-free"
+    address: "127.0.0.1"
+    port: 8200
+    weight: 1
+    type: "vllm"
+
+# --------------------------------------------------------------------------
+# Model Config — two aliases, same physical model, different endpoints/tiers
+# --------------------------------------------------------------------------
+model_config:
+  "qwen14b-admin":
+    preferred_endpoints: ["vllm-14b-admin"]
+    param_size: "14b"
+    quality_score: 0.95
+    description: "Qwen2.5 14B — admin/premium tier (port 8100, dedicated GPU)"
+    capabilities: ["chat", "code", "reasoning", "math"]
+    external_model_ids:
+      vllm: "Qwen/Qwen2.5-14B-Instruct"
+
+  "qwen14b-free":
+    preferred_endpoints: ["vllm-14b-free"]
+    param_size: "14b"
+    quality_score: 0.70
+    description: "Qwen2.5 14B — free tier (port 8200, shared GPU)"
+    capabilities: ["chat", "code"]
+    external_model_ids:
+      vllm: "Qwen/Qwen2.5-14B-Instruct"
+
+default_model: "qwen14b-free"
+
+# --------------------------------------------------------------------------
+# Role Bindings — Authorino group/user → role
+# --------------------------------------------------------------------------
+role_bindings:
+  - name: "admin-binding"
+    description: "Admin user — full access, dedicated tier"
+    subjects:
+      - kind: User
+        name: "user-admin"
+    role: "admin"
+
+  - name: "premium-binding"
+    description: "Premium customers — dedicated tier"
+    subjects:
+      - kind: Group
+        name: "premium"
+    role: "premium_user"
+
+  - name: "pro-binding"
+    description: "Internal engineering — standard tier"
+    subjects:
+      - kind: Group
+        name: "engineering"
+    role: "pro_user"
+
+  - name: "free-binding"
+    description: "Free tier — contractors and free users"
+    subjects:
+      - kind: Group
+        name: "free"
+      - kind: Group
+        name: "contractor"
+    role: "free_user"
+
+# --------------------------------------------------------------------------
+# Decisions — pure authz, no keyword/context conditions
+# --------------------------------------------------------------------------
+strategy: "priority"
+
+decisions:
+  - name: "admin_to_admin_tier"
+    description: "Admin → dedicated admin tier (:8000) with reasoning"
+    priority: 300
+    rules:
+      operator: "AND"
+      conditions:
+        - type: "authz"
+          name: "admin"
+    modelRefs:
+      - model: "qwen14b-admin"
+        use_reasoning: true
+
+  - name: "premium_to_admin_tier"
+    description: "Premium → dedicated admin tier (:8000)"
+    priority: 200
+    rules:
+      operator: "AND"
+      conditions:
+        - type: "authz"
+          name: "premium_user"
+    modelRefs:
+      - model: "qwen14b-admin"
+        use_reasoning: false
+
+  - name: "pro_to_free_tier"
+    description: "Pro/engineering → shared free tier (:8001)"
+    priority: 150
+    rules:
+      operator: "AND"
+      conditions:
+        - type: "authz"
+          name: "pro_user"
+    modelRefs:
+      - model: "qwen14b-free"
+        use_reasoning: false
+
+  - name: "free_to_free_tier"
+    description: "Free/contractor → shared free tier (:8001)"
+    priority: 100
+    rules:
+      operator: "AND"
+      conditions:
+        - type: "authz"
+          name: "free_user"
+    modelRefs:
+      - model: "qwen14b-free"
+        use_reasoning: false
+
+# --------------------------------------------------------------------------
+# Other
+# --------------------------------------------------------------------------
+semantic_cache:
+  enabled: false
+
+clear_route_cache: true
