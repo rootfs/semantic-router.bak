@@ -1,0 +1,123 @@
+# Anthropic vs AWS Bedrock — Same Claude Model, Two Providers
+#
+# Demonstrates routing the same Claude model to either Anthropic's API
+# directly or AWS Bedrock, with provider-specific auth and paths.
+#
+# Architecture:
+#   Client → Envoy → ext_authz (Authorino) → ext_proc (Router) → Provider
+#
+# Provider endpoints:
+#   "anthropic"       → api.anthropic.com           (x-api-key: {key})
+#   "bedrock-us-east" → bedrock-runtime.us-east-1   (Authorization: Bearer {sigv4})
+#
+# Failover: claude-sonnet prefers Anthropic, falls back to Bedrock.
+# Each provider's auth format is driven by the profile type.
+# Keys come from Authorino: x-user-anthropic-key, x-user-bedrock-key.
+
+# ─── Provider Profiles ──────────────────────────────────────────
+# Defines HOW to talk to each provider. Keys come from authz.
+provider_profiles:
+  anthropic-direct:
+    type: "anthropic"
+    base_url: "https://api.anthropic.com"
+    extra_headers:
+      anthropic-version: "2023-06-01"
+
+  bedrock-us-east:
+    type: "bedrock"
+    # Bedrock runtime endpoint — region-specific.
+    # The model ID is embedded in the path via chat_path override.
+    # AWS SigV4 signing produces a Bearer-style Authorization header.
+    base_url: "https://bedrock-runtime.us-east-1.amazonaws.com"
+    chat_path: "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse"
+
+# ─── Endpoints ───────────────────────────────────────────────────
+vllm_endpoints:
+  - name: "anthropic"
+    provider_profile: "anthropic-direct"
+    type: "anthropic"
+
+  - name: "bedrock-us-east"
+    provider_profile: "bedrock-us-east"
+    type: "bedrock"
+
+# ─── Authz ───────────────────────────────────────────────────────
+# Keys injected by Authorino from K8s Secret annotations.
+# fail_open=false: requests without a valid key are rejected.
+authz:
+  fail_open: false
+  providers:
+    - type: header-injection
+      headers:
+        anthropic: "x-user-anthropic-key"
+        bedrock: "x-user-bedrock-key"
+    - type: static-config
+
+# ─── Model Config ────────────────────────────────────────────────
+# Same Claude model, multiple routing entries.
+# external_model_ids ensures the REAL model name is sent to each provider,
+# regardless of what alias the client uses.
+model_config:
+  # Default entry — prefers Anthropic, falls back to Bedrock
+  "claude-sonnet-4-20250514":
+    preferred_endpoints: ["anthropic", "bedrock-us-east"]
+    description: "Claude Sonnet 4 — prefers Anthropic, fails over to Bedrock"
+
+  # Explicit Bedrock pin — client sends this alias, provider sees the real model name
+  "claude-sonnet-4-bedrock":
+    preferred_endpoints: ["bedrock-us-east"]
+    description: "Claude Sonnet 4 — Bedrock only (explicit)"
+    external_model_ids:
+      bedrock: "claude-sonnet-4-20250514"
+
+  # Explicit Anthropic pin — client sends this alias, provider sees the real model name
+  "claude-sonnet-4-anthropic":
+    preferred_endpoints: ["anthropic"]
+    description: "Claude Sonnet 4 — Anthropic only (explicit)"
+    external_model_ids:
+      anthropic: "claude-sonnet-4-20250514"
+
+default_model: "claude-sonnet-4-20250514"
+
+# ─── Routing ─────────────────────────────────────────────────────
+strategy: "priority"
+
+categories:
+  - name: general
+    description: "General conversation and knowledge"
+
+decisions:
+  - name: "all_to_claude"
+    description: "All queries → Claude (default model with failover)"
+    priority: 100
+    rules:
+      operator: "OR"
+      conditions:
+        - type: "domain"
+          name: "general"
+    modelRefs:
+      - model: "claude-sonnet-4-20250514"
+        use_reasoning: false
+
+# ─── Other ───────────────────────────────────────────────────────
+semantic_cache:
+  enabled: false
+
+clear_route_cache: true
+
+# ═══════════════════════════════════════════════════════════════════
+# Provider Routing Summary
+# ═══════════════════════════════════════════════════════════════════
+#
+#   Model Alias                 Endpoints (failover)        Provider       Auth Header
+#   ────────────────────────── ────────────────────────── ─────────────── ────────────────────
+#   claude-sonnet-4-20250514   anthropic → bedrock-us-east anthropic, bedrock x-api-key / Bearer
+#   claude-sonnet-4-bedrock    bedrock-us-east             bedrock        Authorization: Bearer
+#   claude-sonnet-4-anthropic  anthropic                   anthropic      x-api-key
+#
+# Key resolution:
+#   1. Authorino injects x-user-anthropic-key / x-user-bedrock-key from K8s Secrets
+#   2. Router's CredentialResolver reads the header matching the endpoint's provider type
+#   3. Router formats the auth header per providerTypeRegistry defaults:
+#      - anthropic: x-api-key: {key}           (no prefix)
+#      - bedrock:   Authorization: Bearer {key} (SigV4 presigned token)

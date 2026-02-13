@@ -1,0 +1,50 @@
+# Authorino AuthConfig for Anthropic vs Bedrock demo
+#
+# Authenticates via Bearer token matched against K8s Secrets.
+# Injects per-user, per-provider API keys:
+#   - x-user-anthropic-key  (for Anthropic direct endpoints)
+#   - x-user-bedrock-key    (for AWS Bedrock endpoints — SigV4 presigned token)
+#   - x-authz-user-id       (RBAC identity)
+#   - x-authz-user-groups   (RBAC groups)
+#
+apiVersion: authorino.kuadrant.io/v1beta3
+kind: AuthConfig
+metadata:
+  name: anthropic-bedrock-auth
+spec:
+  hosts:
+  - "semantic-router.example.com"
+  - "localhost"
+  - "localhost:8801"
+  - "127.0.0.1"
+  - "127.0.0.1:8801"
+
+  authentication:
+    "api-key-users":
+      apiKey:
+        selector:
+          matchLabels:
+            app: semantic-router
+            demo: anthropic-bedrock
+      credentials:
+        authorizationHeader:
+          prefix: Bearer
+
+  response:
+    success:
+      headers:
+        # ── Provider credential headers ──
+        x-user-anthropic-key:
+          plain:
+            expression: auth.identity.metadata.annotations['anthropic-key']
+        x-user-bedrock-key:
+          plain:
+            expression: auth.identity.metadata.annotations['bedrock-key']
+
+        # ── RBAC identity headers ──
+        x-authz-user-id:
+          plain:
+            expression: auth.identity.metadata.name
+        x-authz-user-groups:
+          plain:
+            expression: auth.identity.metadata.annotations['authz-groups']

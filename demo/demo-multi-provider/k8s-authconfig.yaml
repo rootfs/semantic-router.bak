@@ -1,0 +1,57 @@
+# Authorino AuthConfig for Multi-Cloud Provider demo
+#
+# Authenticates via Bearer token matched against K8s Secrets.
+# Injects per-user, per-provider API keys as response headers:
+#   - x-user-openai-key        (for openai endpoints)
+#   - x-user-anthropic-key     (for anthropic endpoints)
+#   - x-user-azure-openai-key  (for azure-openai endpoints)
+#   - x-authz-user-id          (for RBAC identity)
+#   - x-authz-user-groups      (for RBAC group membership)
+#
+# The router reads these headers via the CredentialResolver chain.
+# The provider_profile type on each endpoint determines WHICH header to read.
+#
+apiVersion: authorino.kuadrant.io/v1beta3
+kind: AuthConfig
+metadata:
+  name: multi-provider-auth
+spec:
+  hosts:
+  - "semantic-router.example.com"
+  - "localhost"
+  - "localhost:8801"
+  - "127.0.0.1"
+  - "127.0.0.1:8801"
+
+  authentication:
+    "api-key-users":
+      apiKey:
+        selector:
+          matchLabels:
+            app: semantic-router
+            demo: multi-provider
+      credentials:
+        authorizationHeader:
+          prefix: Bearer
+
+  response:
+    success:
+      headers:
+        # ── Provider credential headers ──
+        x-user-openai-key:
+          plain:
+            expression: auth.identity.metadata.annotations['openai-key']
+        x-user-anthropic-key:
+          plain:
+            expression: auth.identity.metadata.annotations['anthropic-key']
+        x-user-azure-openai-key:
+          plain:
+            expression: auth.identity.metadata.annotations['azure-openai-key']
+
+        # ── RBAC identity headers ──
+        x-authz-user-id:
+          plain:
+            expression: auth.identity.metadata.name
+        x-authz-user-groups:
+          plain:
+            expression: auth.identity.metadata.annotations['authz-groups']
