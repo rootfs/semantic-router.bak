@@ -1,0 +1,202 @@
+# Modality Routing Demo Config
+#
+# Demonstrates intelligent routing between AR (text) and Diffusion (image) models
+# using the Semantic Router's modality detection signal.
+#
+# Architecture:
+#   Client → Envoy :8801 → Semantic Router (ext_proc :50051) → vLLM endpoints
+#     - AR:        Qwen/Qwen2.5-14B-Instruct @ :8100 (text generation)
+#     - DIFFUSION: Qwen/Qwen-Image via vLLM-Omni @ :8091 (image generation)
+#     - BOTH:      AR text + image generation in parallel
+#
+# Usage:
+#   bin/router -config=scripts/demo-modality/router-config.yaml
+
+# Disable features not needed for this demo
+semantic_cache:
+  enabled: false
+
+tools:
+  enabled: false
+
+prompt_guard:
+  enabled: false
+
+# Response API support
+response_api:
+  enabled: true
+  store_backend: "memory"
+  ttl_seconds: 3600
+  max_responses: 100
+
+# ── vLLM Endpoints ───────────────────────────────────────────────────────
+vllm_endpoints:
+  - name: "vllm-ar"
+    address: "127.0.0.1"
+    port: 8100
+    weight: 1
+    health_check_path: "/health"
+  - name: "vllm-omni"
+    address: "127.0.0.1"
+    port: 8091
+    weight: 1
+    health_check_path: "/health"
+
+# ── Model Config ─────────────────────────────────────────────────────────
+model_config:
+  "Qwen/Qwen2.5-14B-Instruct":
+    reasoning_family: "none"
+    preferred_endpoints: ["vllm-ar"]
+    modality: "ar"
+  "Qwen/Qwen-Image":
+    reasoning_family: "none"
+    preferred_endpoints: ["vllm-omni"]
+    modality: "diffusion"
+    image_gen_backend: "vllm_omni_local"
+
+# ── Image Gen Backends ───────────────────────────────────────────────────
+image_gen_backends:
+  vllm_omni_local:
+    type: "vllm_omni"
+    base_url: "http://127.0.0.1:8091"
+    model: "Qwen/Qwen-Image"
+    num_inference_steps: 4
+    cfg_scale: 0.0
+    default_width: 512
+    default_height: 512
+    timeout_seconds: 120
+
+# ── Modality Detector (hybrid: classifier + keyword) ─────────────────────
+modality_detector:
+  enabled: true
+  method: "hybrid"
+
+  classifier:
+    model_path: "./models/mmbert32k-modality-router-merged"
+    use_cpu: true
+
+  confidence_threshold: 0.6
+  lower_threshold_ratio: 0.7
+
+  prompt_prefixes:
+    - "generate an image of "
+    - "create an image of "
+    - "draw an image of "
+    - "make an image of "
+    - "generate a picture of "
+    - "create a picture of "
+    - "draw a picture of "
+    - "generate "
+    - "create "
+    - "draw "
+
+  keywords:
+    - "generate an image"
+    - "generate image"
+    - "create an image"
+    - "create image"
+    - "draw"
+    - "make a picture"
+    - "generate a picture"
+    - "create a picture"
+    - "make an image"
+    - "paint"
+    - "sketch"
+    - "render an image"
+    - "produce an image"
+
+  both_keywords:
+    - "and illustrate"
+    - "with a picture"
+    - "with an image"
+    - "with an illustration"
+    - "with a diagram"
+    - "include a picture"
+    - "include an image"
+    - "and generate an image"
+    - "and draw"
+    - "also generate"
+    - "with a photo"
+
+# ── Modality Signal Rules ────────────────────────────────────────────────
+modality_rules:
+  - name: "AR"
+    description: "Text-only response via autoregressive LLM"
+  - name: "DIFFUSION"
+    description: "Image generation via diffusion model"
+  - name: "BOTH"
+    description: "Hybrid response requiring both text and image"
+
+# Minimal categories (required by schema)
+categories:
+  - name: text_generation
+    description: "Text generation and general queries"
+    mmlu_categories: ["other"]
+
+strategy: "priority"
+
+# ── Decisions ─────────────────────────────────────────────────────────────
+decisions:
+  - name: "image_generation"
+    description: "Route image generation requests to diffusion model"
+    priority: 200
+    rules:
+      operator: "AND"
+      conditions:
+        - type: "modality"
+          name: "DIFFUSION"
+    modelRefs:
+      - model: "Qwen/Qwen-Image"
+        use_reasoning: false
+
+  - name: "text_and_image"
+    description: "Route hybrid text+image requests to both models in parallel"
+    priority: 190
+    rules:
+      operator: "AND"
+      conditions:
+        - type: "modality"
+          name: "BOTH"
+    modelRefs:
+      - model: "Qwen/Qwen2.5-14B-Instruct"
+        use_reasoning: false
+      - model: "Qwen/Qwen-Image"
+        use_reasoning: false
+
+  - name: "text_generation"
+    description: "Default text routing for AR (text-only) requests"
+    priority: 1
+    rules:
+      operator: "OR"
+      conditions:
+        - type: "modality"
+          name: "AR"
+        - type: "domain"
+          name: "text_generation"
+    modelRefs:
+      - model: "Qwen/Qwen2.5-14B-Instruct"
+        use_reasoning: false
+
+# Default model — AR text model handles unmatched requests
+default_model: "Qwen/Qwen2.5-14B-Instruct"
+
+# Disable reasoning
+reasoning_families: {}
+
+# Minimal API config
+api:
+  batch_classification:
+    max_batch_size: 10
+    concurrency_threshold: 2
+    max_concurrency: 4
+
+# Authz — disabled for demo (no auth backend)
+authz:
+  fail_open: true
+
+# Observability — metrics only
+observability:
+  metrics:
+    enabled: true
+  tracing:
+    enabled: false
