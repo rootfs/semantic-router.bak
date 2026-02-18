@@ -1,0 +1,38 @@
+# Limitador rate limit definitions
+# These limits are enforced by Kuadrant Limitador via the Envoy RLS v3 gRPC protocol.
+#
+# The semantic router sends descriptors:
+#   descriptor[0]: { user_id: "<user>", model: "<model>" }
+#   descriptor[1]: { group: "<group>" }
+#
+# Limits are intentionally low for demo visibility.
+
+# Free-tier: 3 requests per minute (per user)
+- namespace: semantic-router
+  name: free-tier-rpm
+  max_value: 3
+  seconds: 60
+  conditions:
+    - "descriptors[1].group == 'free-tier'"
+  variables:
+    - "descriptors[0].user_id"
+
+# Premium-tier: 10 requests per minute (per user)
+- namespace: semantic-router
+  name: premium-tier-rpm
+  max_value: 10
+  seconds: 60
+  conditions:
+    - "descriptors[1].group == 'premium-tier'"
+  variables:
+    - "descriptors[0].user_id"
+
+# Admin: 500 requests per minute (per user)
+- namespace: semantic-router
+  name: admin-rpm
+  max_value: 500
+  seconds: 60
+  conditions:
+    - "descriptors[1].group == 'platform-admins'"
+  variables:
+    - "descriptors[0].user_id"

@@ -1,0 +1,43 @@
+# Router config — Kuadrant Limitador as external rate limit service
+#
+# Uses the envoy-ratelimit provider which speaks gRPC to Limitador's
+# Envoy RLS v3 endpoint on 127.0.0.1:8081.
+#
+# Architecture:
+#   Client → Envoy :8805 (ext_proc) → Router :50056 → vLLM :8100
+#                                         ↓
+#                                   Limitador :8081 (gRPC RLS v3)
+#
+# Rate limit rules (defined in limitador's limits.yaml):
+#   free-tier       → 3 RPM per user
+#   premium-tier    → 10 RPM per user
+#   platform-admins → 500 RPM per user
+
+authz:
+  fail_open: true
+  identity:
+    user_id_header: "x-jwt-sub"
+    user_groups_header: "x-jwt-groups"
+
+ratelimit:
+  fail_open: false
+  providers:
+    - type: envoy-ratelimit
+      address: "127.0.0.1:8081"
+      domain: "semantic-router"
+
+vllm_endpoints:
+  - name: "qwen-14b"
+    address: "127.0.0.1"
+    port: 8100
+    weight: 1
+    health_check_path: "/health"
+
+model_config:
+  "Qwen/Qwen2.5-14B-Instruct":
+    model_name: "Qwen/Qwen2.5-14B-Instruct"
+    access_key: ""
+    quality_score: 0.90
+    preferred_endpoints: ["qwen-14b"]
+
+default_model: "Qwen/Qwen2.5-14B-Instruct"
