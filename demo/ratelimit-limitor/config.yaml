@@ -1,0 +1,57 @@
+# Demo Config — Local Limiter rate limiting with tight limits for demonstration
+#
+# Uses the router's built-in local-limiter provider.
+# Limits are deliberately LOW so rate limiting triggers visibly in the demo.
+#
+# Architecture:
+#   Client → Envoy :8804 (ext_proc only) → vLLM :8100
+#
+# Rate limit tiers:
+#   free-tier    → 3 RPM (hits after 3 requests)
+#   premium-tier → 10 RPM
+#   (no default wildcard — only group-matched rules fire)
+
+authz:
+  fail_open: true
+  identity:
+    user_id_header: "x-jwt-sub"
+    user_groups_header: "x-jwt-groups"
+
+ratelimit:
+  fail_open: false
+  providers:
+    - type: local-limiter
+      rules:
+        - name: "free-rpm"
+          match:
+            group: "free-tier"
+          requests_per_unit: 3
+          unit: minute
+
+        - name: "premium-rpm"
+          match:
+            group: "premium-tier"
+          requests_per_unit: 10
+          unit: minute
+
+        - name: "admin-rpm"
+          match:
+            group: "platform-admins"
+          requests_per_unit: 500
+          unit: minute
+
+vllm_endpoints:
+  - name: "qwen-14b"
+    address: "127.0.0.1"
+    port: 8100
+    weight: 1
+    health_check_path: "/health"
+
+model_config:
+  "Qwen/Qwen2.5-14B-Instruct":
+    model_name: "Qwen/Qwen2.5-14B-Instruct"
+    access_key: ""
+    quality_score: 0.90
+    preferred_endpoints: ["qwen-14b"]
+
+default_model: "Qwen/Qwen2.5-14B-Instruct"
