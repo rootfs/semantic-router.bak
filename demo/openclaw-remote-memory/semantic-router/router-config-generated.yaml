@@ -1,0 +1,407 @@
+vector_store:
+  enabled: true
+  backend_type: "memory"
+  embedding_model: "mmbert"
+  embedding_dimension: 768
+  ingestion_workers: 2
+  file_storage_dir: "/tmp/vsr-data"
+response_api:
+  enabled: true
+  store_backend: memory
+  ttl_seconds: 86400
+  max_responses: 1000
+router_replay:
+  store_backend: memory
+  ttl_seconds: 2592000
+  async_writes: false
+semantic_cache:
+  enabled: true
+  backend_type: memory
+  similarity_threshold: 0.8
+  max_entries: 1000
+  ttl_seconds: 3600
+  eviction_policy: fifo
+  use_hnsw: true
+  hnsw_m: 16
+  hnsw_ef_construction: 200
+tools:
+  enabled: true
+  top_k: 3
+  similarity_threshold: 0.2
+  tools_db_path: config/tools_db.json
+  fallback_to_empty: true
+prompt_guard:
+  enabled: true
+  use_mmbert_32k: true
+  model_id: models/mmbert32k-jailbreak-detector-merged
+  jailbreak_mapping_path: models/mmbert32k-jailbreak-detector-merged/jailbreak_type_mapping.json
+  threshold: 0.7
+  use_cpu: true
+classifier:
+  category_model:
+    model_id: models/mmbert32k-intent-classifier-merged
+    use_mmbert_32k: true
+    threshold: 0.6
+    use_cpu: true
+    category_mapping_path: models/mmbert32k-intent-classifier-merged/category_mapping.json
+  pii_model:
+    model_id: models/mmbert32k-pii-detector-merged
+    use_mmbert_32k: true
+    threshold: 0.9
+    use_cpu: true
+    pii_mapping_path: models/mmbert32k-pii-detector-merged/pii_type_mapping.json
+hallucination_mitigation:
+  enabled: false
+  fact_check_model:
+    model_id: models/mmbert32k-factcheck-classifier-merged
+    threshold: 0.6
+    use_cpu: true
+    use_mmbert_32k: true
+  hallucination_model:
+    model_id: models/mom-halugate-detector
+    threshold: 0.8
+    use_cpu: true
+    min_span_length: 2
+    min_span_confidence: 0.6
+    context_window_size: 50
+    enable_nli_filtering: true
+    nli_entailment_threshold: 0.75
+  nli_model:
+    model_id: models/mom-halugate-explainer
+    threshold: 0.9
+    use_cpu: true
+feedback_detector:
+  enabled: true
+  model_id: models/mmbert32k-feedback-detector-merged
+  threshold: 0.7
+  use_cpu: true
+  use_mmbert_32k: true
+embedding_models:
+  mmbert_model_path: models/mom-embedding-ultra
+  use_cpu: true
+  hnsw_config:
+    model_type: mmbert
+    preload_embeddings: true
+    target_dimension: 768
+    enable_soft_matching: true
+    min_score_threshold: 0.5
+observability:
+  metrics:
+    enabled: true
+  tracing:
+    enabled: true
+    provider: opentelemetry
+    exporter:
+      type: otlp
+      endpoint: vllm-sr-jaeger:4317
+      insecure: true
+    sampling:
+      type: always_on
+      rate: 1.0
+    resource:
+      service_name: vllm-sr
+      service_version: v0.1.0
+      deployment_environment: development
+looper:
+  enabled: true
+  endpoint: http://localhost:8899/v1/chat/completions
+  timeout_seconds: 1200
+  headers: {}
+clear_route_cache: true
+model_selection:
+  enabled: true
+  default_algorithm: knn
+  llm_candidates_path: config/model_selection/llm_candidates.json
+  models_path: models/model_selection
+  training_data_path: config/model_selection/routing_training_data.jsonl
+  knn:
+    k: 5
+    weights: distance
+    metric: cosine
+    model_file: knn_model.json
+  kmeans:
+    num_clusters: 8
+    efficiency_weight: 0.3
+    max_iterations: 100
+    model_file: kmeans_model.json
+  svm:
+    kernel: rbf
+    c: 1.0
+    gamma: auto
+    model_file: svm_model.json
+  custom_training:
+    enabled: false
+    custom_data_path: ''
+    merge_with_pretrained: true
+    min_samples: 50
+keyword_rules:
+- name: math_keywords
+  operator: OR
+  keywords:
+  - calculate
+  - equation
+  case_sensitive: false
+- name: code_keywords
+  operator: OR
+  keywords:
+  - function
+  - class
+  case_sensitive: false
+- name: looper_keywords
+  operator: OR
+  keywords:
+  - looper
+  - collaborative
+  case_sensitive: false
+embedding_rules:
+- name: quick_answer
+  threshold: 0.7
+  candidates:
+  - quick answer
+  - simple question
+  - fast response
+  - brief reply
+  - short answer
+  - just tell me
+  - answer quickly
+  - give me the result
+  aggregation_method: max
+- name: deep_thinking
+  threshold: 0.75
+  candidates:
+  - think step by step
+  - reason through this
+  - analyze carefully
+  - deep thinking
+  - think thoroughly
+  - consider all aspects
+  - break down the problem
+  - explain your reasoning
+  - show logical steps
+  - think systematically
+  - analyze in detail
+  - work through methodically
+  - use critical thinking
+  - apply logical reasoning
+  - think deeply
+  - consider carefully
+  - examine thoroughly
+  - reason systematically
+  - analyze step by step
+  - think it through
+  - evaluate carefully
+  - assess thoroughly
+  - think critically
+  - reason logically
+  - analyze comprehensively
+  - think methodically
+  - examine carefully
+  - consider systematically
+  - think rationally
+  - analyze rigorously
+  aggregation_method: max
+fact_check_rules:
+- name: needs_fact_check
+  description: Query contains factual claims that should be verified against context
+- name: no_fact_check_needed
+  description: Query is creative, code-related, or opinion-based - no fact verification
+    needed
+user_feedback_rules:
+- name: need_clarification
+  description: User needs more clarification on the answer
+- name: satisfied
+  description: User is satisfied with the answer
+- name: want_different
+  description: User wants some other different answer
+- name: wrong_answer
+  description: User is not satisfied with the answer and it is wrong
+preference_rules:
+- name: code_generation
+  description: Generating new code snippets, writing functions, creating classes
+- name: bug_fixing
+  description: Identifying and fixing errors, debugging issues, troubleshooting problems
+- name: code_review
+  description: Reviewing code quality, suggesting improvements, best practices
+- name: other
+  description: Irrelevant queries or already fulfilled requests
+language_rules:
+- name: en
+  description: English language queries
+- name: es
+  description: Spanish language queries
+- name: zh
+  description: Chinese language queries
+- name: fr
+  description: French language queries
+- name: ru
+  description: Russian language queries
+- name: de
+  description: German language queries
+- name: ja
+  description: Japanese language queries
+latency_rules:
+- name: low_latency_comprehensive
+  tpot_percentile: 10
+  ttft_percentile: 10
+  description: 'RECOMMENDED: For real-time applications - fast start and fast generation'
+- name: balanced_latency
+  tpot_percentile: 50
+  ttft_percentile: 10
+  description: Prioritize fast start, accept moderate generation speed
+- name: batch_processing_optimized
+  tpot_percentile: 10
+  description: For batch processing where throughput (TPOT) is critical, TTFT less
+    important
+- name: chat_fast_start
+  ttft_percentile: 10
+  description: For chat applications where fast first token (TTFT) is critical for
+    UX
+context_rules:
+- name: low_token_count
+  min_tokens: '0'
+  max_tokens: 1K
+  description: Short requests
+- name: high_token_count
+  min_tokens: 1K
+  max_tokens: 128K
+  description: Long requests requiring large context window
+complexity_rules:
+- name: code_complexity
+  threshold: 0.1
+  hard:
+    candidates:
+    - design distributed system
+    - implement consensus algorithm
+    - optimize for scale
+    - architect microservices
+    - fix race condition
+    - implement garbage collector
+  easy:
+    candidates:
+    - print hello world
+    - loop through array
+    - read file
+    - sort list
+    - string concatenation
+    - simple function
+  description: Detects code complexity level
+  composer:
+    operator: AND
+    conditions:
+    - type: domain
+      name: computer science
+- name: math_complexity
+  threshold: 0.1
+  hard:
+    candidates:
+    - prove mathematically
+    - derive the equation
+    - formal proof
+    - solve differential equation
+    - prove by induction
+    - analyze convergence
+  easy:
+    candidates:
+    - what is 2+2
+    - simple arithmetic
+    - basic calculation
+    - count numbers
+    - add two numbers
+    - multiply values
+  description: Detects mathematical complexity level
+  composer:
+    operator: AND
+    conditions:
+    - type: domain
+      name: math
+categories:
+- name: math
+  description: Mathematics and quantitative reasoning
+  mmlu_categories:
+  - math
+- name: physics
+  description: Physics and physical sciences
+  mmlu_categories:
+  - physics
+- name: chemistry
+  description: Chemistry and chemical sciences questions
+  mmlu_categories:
+  - chemistry
+- name: biology
+  description: Biology and life sciences questions
+  mmlu_categories:
+  - biology
+- name: computer_science
+  description: Computer science and programming
+  mmlu_categories:
+  - computer_science
+- name: engineering
+  description: Engineering and technical problem-solving
+  mmlu_categories:
+  - engineering
+- name: business
+  description: Business and management related queries
+  mmlu_categories:
+  - business
+- name: economics
+  description: Economics and financial topics
+  mmlu_categories:
+  - economics
+- name: law
+  description: Legal questions and law-related topics
+  mmlu_categories:
+  - law
+- name: psychology
+  description: Psychology and mental health topics
+  mmlu_categories:
+  - psychology
+- name: philosophy
+  description: Philosophy and ethical questions
+  mmlu_categories:
+  - philosophy
+- name: history
+  description: Historical questions and cultural topics
+  mmlu_categories:
+  - history
+- name: health
+  description: Health and medical information queries
+  mmlu_categories:
+  - health
+- name: other
+  description: General knowledge and miscellaneous topics
+  mmlu_categories:
+  - other
+decisions:
+- name: general_route
+  description: General catch-all route
+  priority: 50
+  rules:
+    operator: AND
+    conditions:
+    - type: domain
+      name: other
+  modelRefs:
+  - model: Qwen/Qwen2.5-14B-Instruct
+    use_reasoning: false
+    reasoning_effort: null
+    lora_name: null
+  algorithm: null
+  plugins: []
+vllm_endpoints:
+- name: Qwen_Qwen2.5-14B-Instruct_local_vllm
+  address: 127.0.0.1
+  port: 8100
+  weight: 1
+  protocol: http
+  model: Qwen/Qwen2.5-14B-Instruct
+model_config:
+  Qwen/Qwen2.5-14B-Instruct:
+    preferred_endpoints: ["Qwen_Qwen2.5-14B-Instruct_local_vllm"]
+    reasoning_family: null
+    access_key: null
+default_model: Qwen/Qwen2.5-14B-Instruct
+reasoning_families:
+  gpt-oss:
+    type: reasoning_effort
+    parameter: reasoning_effort
+default_reasoning_effort: low

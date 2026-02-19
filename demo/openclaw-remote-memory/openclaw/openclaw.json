@@ -1,0 +1,65 @@
+{
+  "models": {
+    "providers": {
+      "semantic-router": {
+        "baseUrl": "http://127.0.0.1:8801/v1",
+        "apiKey": "not-needed",
+        "api": "openai-completions",
+        "authHeader": false,
+        "models": [
+          {
+            "id": "Qwen/Qwen2.5-14B-Instruct",
+            "name": "Qwen 2.5 14B (via Semantic Router)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 32768,
+            "maxTokens": 4096,
+            "compat": {
+              "maxTokensField": "max_tokens"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "semantic-router/Qwen/Qwen2.5-14B-Instruct"
+      },
+      "workspace": "/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      }
+    },
+    "list": [
+      {
+        "id": "demo",
+        "default": true,
+        "name": "Demo Agent",
+        "workspace": "/workspace"
+      }
+    ]
+  },
+  "gateway": {
+    "port": 18788
+  },
+  "memory": {
+    "backend": "remote",
+    "remote": {
+      "baseUrl": "http://127.0.0.1:8080",
+      "vectorStoreName": "openclaw-demo",
+      "syncIntervalMs": 30000,
+      "searchMaxResults": 5,
+      "searchScoreThreshold": 0.3
+    }
+  },
+}

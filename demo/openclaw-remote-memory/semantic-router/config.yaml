@@ -1,0 +1,331 @@
+# vLLM Semantic Router - minimal config for openclaw remote memory test
+
+version: v0.1
+
+# Enable vector store API for openclaw remote memory
+vector_store:
+  enabled: true
+  backend_type: "memory"
+  embedding_model: "bert"
+  embedding_dimension: 384
+  ingestion_workers: 2
+  file_storage_dir: "/tmp/vsr-data"
+
+# Listeners - Network configuration
+listeners:
+  - name: "http-8888"
+    address: "0.0.0.0"
+    port: 8888
+    timeout: "300s"
+
+# Signals - Classification signals for routing
+signals:
+  # Keyword-based signals
+  keywords:
+    - name: "math_keywords"
+      operator: "OR"
+      keywords:
+        - "calculate"
+        - "equation"
+      case_sensitive: false
+
+    - name: "code_keywords"
+      operator: "OR"
+      keywords:
+        - "function"
+        - "class"
+      case_sensitive: false
+
+    - name: "looper_keywords"
+      operator: "OR"
+      keywords:
+        - "looper"
+        - "collaborative"
+      case_sensitive: false
+
+  # Embedding-based signals (semantic similarity)
+  embeddings:
+    - name: "quick_answer"
+      threshold: 0.70
+      candidates:
+        - "quick answer"
+        - "simple question"
+        - "fast response"
+        - "brief reply"
+        - "short answer"
+        - "just tell me"
+        - "answer quickly"
+        - "give me the result"
+      aggregation_method: "max"
+
+    - name: "deep_thinking"
+      threshold: 0.75
+      candidates:
+        - "think step by step"
+        - "reason through this"
+        - "analyze carefully"
+        - "deep thinking"
+        - "think thoroughly"
+        - "consider all aspects"
+        - "break down the problem"
+        - "explain your reasoning"
+        - "show logical steps"
+        - "think systematically"
+        - "analyze in detail"
+        - "work through methodically"
+        - "use critical thinking"
+        - "apply logical reasoning"
+        - "think deeply"
+        - "consider carefully"
+        - "examine thoroughly"
+        - "reason systematically"
+        - "analyze step by step"
+        - "think it through"
+        - "evaluate carefully"
+        - "assess thoroughly"
+        - "think critically"
+        - "reason logically"
+        - "analyze comprehensively"
+        - "think methodically"
+        - "examine carefully"
+        - "consider systematically"
+        - "think rationally"
+        - "analyze rigorously"
+      aggregation_method: "max"
+
+  # domains - Domain categories (optional, can be auto-generated)
+  domains:
+    - name: "math"
+      description: "Mathematics and quantitative reasoning"
+      mmlu_categories: ["math"]
+    - name: "physics"
+      description: "Physics and physical sciences"
+      mmlu_categories: ["physics"]
+    - name: "chemistry"
+      description: "Chemistry and chemical sciences questions"
+      mmlu_categories: ["chemistry"]
+    - name: "biology"
+      description: "Biology and life sciences questions"
+      mmlu_categories: ["biology"]
+    - name: "computer_science"
+      description: "Computer science and programming"
+      mmlu_categories: ["computer_science"]
+    - name: "engineering"
+      description: "Engineering and technical problem-solving"
+      mmlu_categories: ["engineering"]
+    - name: "business"
+      description: "Business and management related queries"
+      mmlu_categories: ["business"]
+    - name: "economics"
+      description: "Economics and financial topics"
+      mmlu_categories: ["economics"]
+    - name: "law"
+      description: "Legal questions and law-related topics"
+      mmlu_categories: ["law"]
+    - name: "psychology"
+      description: "Psychology and mental health topics"
+      mmlu_categories: ["psychology"]
+    - name: "philosophy"
+      description: "Philosophy and ethical questions"
+      mmlu_categories: ["philosophy"]
+    - name: "history"
+      description: "Historical questions and cultural topics"
+      mmlu_categories: ["history"]
+    - name: "health"
+      description: "Health and medical information queries"
+      mmlu_categories: ["health"]
+    - name: "other"
+      description: "General knowledge and miscellaneous topics"
+      mmlu_categories: ["other"]
+
+  # fact_check - Fact-checking signals
+  fact_check:
+    - name: needs_fact_check
+      description: "Query contains factual claims that should be verified against context"
+    - name: no_fact_check_needed
+      description: "Query is creative, code-related, or opinion-based - no fact verification needed"
+
+  # user_feedbacks - User feedback signals
+  user_feedbacks:
+    - name: need_clarification
+      description: "User needs more clarification on the answer"
+    - name: satisfied
+      description: "User is satisfied with the answer"
+    - name: want_different
+      description: "User wants some other different answer"
+    - name: wrong_answer
+      description: "User is not satisfied with the answer and it is wrong"
+
+  # preferences - Route preferences via external LLM
+  preferences:
+    - name: "code_generation"
+      description: "Generating new code snippets, writing functions, creating classes"
+    - name: "bug_fixing"
+      description: "Identifying and fixing errors, debugging issues, troubleshooting problems"
+    - name: "code_review"
+      description: "Reviewing code quality, suggesting improvements, best practices"
+    - name: "other"
+      description: "Irrelevant queries or already fulfilled requests"
+
+  # language - Multi-language detection signals
+  language:
+    - name: "en"
+      description: "English language queries"
+    - name: "es"
+      description: "Spanish language queries"
+    - name: "zh"
+      description: "Chinese language queries"
+    - name: "fr"
+      description: "French language queries"
+    - name: "ru"
+      description: "Russian language queries"
+    - name: "de"
+      description: "German language queries"
+    - name: "ja"
+      description: "Japanese language queries"
+
+  # latency - Latency-based routing signals (TPOT and TTFT percentile-based)
+  # Percentile-based rules adapt to each model's actual performance distribution
+  # Works with any number of observations (1+): uses average for 1-2, percentile for 3+
+  # 
+  # ⚠️  RECOMMENDATION: Use BOTH tpot_percentile AND ttft_percentile for comprehensive latency evaluation
+  #    - TPOT: Measures token generation speed (throughput)
+  #    - TTFT: Measures first token latency (user-perceived latency)
+  #    - Together: Complete latency picture for optimal routing decisions
+  # 
+  # You CAN use only one if needed for specific use cases:
+  #   - TPOT only: Batch processing, cost optimization (throughput matters)
+  #   - TTFT only: Real-time chat (user perception matters)
+  #   - Both: RECOMMENDED for most applications (comprehensive evaluation)
+  # 
+  # At least one of tpot_percentile or ttft_percentile must be set (validation requirement)
+  # When both are set, model must meet BOTH thresholds (AND logic)
+  latency:
+    # Example 1: RECOMMENDED - Both TPOT and TTFT percentiles (comprehensive latency evaluation)
+    - name: "low_latency_comprehensive"
+      tpot_percentile: 10  # 10th percentile for TPOT (top 10% fastest token generation)
+      ttft_percentile: 10  # 10th percentile for TTFT (top 10% fastest first token)
+      description: "RECOMMENDED: For real-time applications - fast start and fast generation"
+    
+    # Example 2: Different percentiles for different priorities
+    - name: "balanced_latency"
+      tpot_percentile: 50  # Median TPOT (top 50%)
+      ttft_percentile: 10  # Top 10% TTFT (prioritize fast start)
+      description: "Prioritize fast start, accept moderate generation speed"
+    
+    # Example 3: TPOT percentile only (use case: batch processing, cost optimization)
+    # ⚠️  Note: Only using one metric is allowed but not recommended for most use cases
+    - name: "batch_processing_optimized"
+      tpot_percentile: 10  # 10th percentile for TPOT (top 10% fastest token generation)
+      # ttft_percentile: not set - acceptable for batch processing where throughput matters
+      description: "For batch processing where throughput (TPOT) is critical, TTFT less important"
+    
+    # Example 4: TTFT percentile only (use case: real-time chat where first token matters)
+    # ⚠️  Note: Only using one metric is allowed but not recommended for most use cases
+    - name: "chat_fast_start"
+      ttft_percentile: 10  # 10th percentile for TTFT (top 10% fastest first token)
+      # tpot_percentile: not set - acceptable for chat apps where user perception matters
+      description: "For chat applications where fast first token (TTFT) is critical for UX"
+
+  # context - Context length signals (Token Count)
+  context:
+    - name: "low_token_count"
+      min_tokens: "0"
+      max_tokens: "1K"
+      description: "Short requests"
+    - name: "high_token_count"
+      min_tokens: "1K"
+      max_tokens: "128K"
+      description: "Long requests requiring large context window"
+
+  # complexity - Complexity signals (Embedding-based difficulty detection)
+  # IMPORTANT: It is strongly recommended to configure a composer for each complexity rule
+  # to filter based on other signals (e.g., domain). This prevents misclassification where
+  # a math question might match code_complexity or vice versa.
+  complexity:
+    - name: "code_complexity"
+      composer:
+        operator: "AND"
+        conditions:
+          - type: "domain"
+            name: "computer science"
+      threshold: 0.1
+      hard:
+        candidates:
+          - "design distributed system"
+          - "implement consensus algorithm"
+          - "optimize for scale"
+          - "architect microservices"
+          - "fix race condition"
+          - "implement garbage collector"
+      easy:
+        candidates:
+          - "print hello world"
+          - "loop through array"
+          - "read file"
+          - "sort list"
+          - "string concatenation"
+          - "simple function"
+      description: "Detects code complexity level"
+    - name: "math_complexity"
+      composer:
+        operator: "AND"
+        conditions:
+          - type: "domain"
+            name: "math"
+      threshold: 0.1
+      hard:
+        candidates:
+          - "prove mathematically"
+          - "derive the equation"
+          - "formal proof"
+          - "solve differential equation"
+          - "prove by induction"
+          - "analyze convergence"
+      easy:
+        candidates:
+          - "what is 2+2"
+          - "simple arithmetic"
+          - "basic calculation"
+          - "count numbers"
+          - "add two numbers"
+          - "multiply values"
+      description: "Detects mathematical complexity level"
+
+# Decisions - Routing logic
+decisions:
+  - name: "general_route"
+    description: "General catch-all route"
+    priority: 50
+    rules:
+      operator: "AND"
+      conditions:
+        - type: "domain"
+          name: "other"
+    modelRefs:
+      - model: "Qwen/Qwen2.5-14B-Instruct"
+        use_reasoning: false
+
+providers:
+  # Model configuration
+  # param_size is used by confidence algorithm to sort models (smallest first)
+  models:
+    - name: "Qwen/Qwen2.5-14B-Instruct"
+      param_size: "14b"
+      endpoints:
+        - name: "local_vllm"
+          weight: 1
+          endpoint: "127.0.0.1:8100"
+          protocol: "http"
+
+  # Default model for fallback
+  default_model: "Qwen/Qwen2.5-14B-Instruct"
+
+  # Reasoning families configuration
+  reasoning_families:
+    gpt-oss:
+      type: "reasoning_effort"
+      parameter: "reasoning_effort"
+
+  # Default reasoning effort level
+  default_reasoning_effort: "low"
