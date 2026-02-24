@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/shared"
+
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/memory"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
@@ -169,7 +172,9 @@ func getTimeout(resolved *ResolvedLLMConfig) time.Duration {
 	return 5 * time.Second
 }
 
-// queryRewriteSystemPrompt is the system prompt for query rewriting
+// queryRewriteSystemPrompt is the system prompt for query rewriting.
+// Returns JSON to leverage response_format: json_object which prevents
+// reasoning model artifacts like <think> tags.
 const queryRewriteSystemPrompt = `You are a query rewriter for semantic search in a memory database.
 
 Given conversation history and a user query, rewrite the query to be self-contained
@@ -186,32 +191,28 @@ CRITICAL RULES:
 - Include CONSTRAINTS when relevant (cannot use X, must use Y, excluded, limitations)
 - For tech/deployment queries, include any mentioned technologies or platforms
 - If the query is already self-contained, return it unchanged
-- Return ONLY the rewritten query, no explanation or quotes
+- Return ONLY a JSON object with a single "query" field
 
 EXAMPLES:
 History: [user]: My project budget is $50,000 and deadline is March 15th
 Query: When is the deadline?
-Rewritten: When is the deadline for my $50,000 project?
+Output: {"query": "When is the deadline for my $50,000 project?"}
 
 History: [user]: I'm building an e-commerce platform
 Query: I prefer React for frontend and Go for backend
-Rewritten: I prefer React for frontend and Go for backend for my e-commerce platform
+Output: {"query": "I prefer React for frontend and Go for backend for my e-commerce platform"}
 
 History: [user]: I prefer React for frontend and Go for backend
 Query: What tech should I use?
-Rewritten: What tech stack should I use considering my preference for React frontend and Go backend?
+Output: {"query": "What tech stack should I use considering my preference for React frontend and Go backend?"}
 
 History: [user]: We cannot use AWS, must deploy on Azure
 Query: Where can I deploy?
-Rewritten: Where can I deploy my project given I cannot use AWS and must use Azure?
-
-History: [user]: Building an e-commerce platform with PostgreSQL database
-Query: What database?
-Rewritten: What database should I use for my e-commerce platform using PostgreSQL?
+Output: {"query": "Where can I deploy my project given I cannot use AWS and must use Azure?"}
 
 History: (no relevant context)
 Query: What is my budget?
-Rewritten: What is my project budget?`
+Output: {"query": "What is my project budget?"}`
 
 // BuildSearchQuery rewrites a query with conversation context for semantic search.
 // It uses an LLM to understand context and produce a self-contained query.
@@ -247,15 +248,12 @@ func BuildSearchQuery(ctx context.Context, history []ConversationMessage, query 
 	logging.Infof("║ ORIGINAL QUERY: %s", query)
 	logging.Infof("╚══════════════════════════════════════════════════════════════════╝")
 
-	// Call LLM for rewriting
 	rewrittenQuery, err := callLLMForQueryRewrite(ctx, resolved, userPrompt)
 	if err != nil {
 		logging.Errorf("Memory: Query rewriting failed, using original: %v", err)
-		// Fallback to original query on error
 		return query, nil
 	}
 
-	// Clean up the response
 	rewrittenQuery = strings.TrimSpace(rewrittenQuery)
 	rewrittenQuery = strings.Trim(rewrittenQuery, "\"'")
 
@@ -295,32 +293,9 @@ func truncateForLog(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// =============================================================================
-// LLM Client for Query Rewriting
-// =============================================================================
-
-// llmChatRequest represents an OpenAI-compatible chat request
-type llmChatRequest struct {
-	Model       string           `json:"model"`
-	Messages    []llmChatMessage `json:"messages"`
-	MaxTokens   int              `json:"max_tokens,omitempty"`
-	Temperature float64          `json:"temperature,omitempty"`
-	Stream      bool             `json:"stream"`
-}
-
-type llmChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// llmChatResponse represents an OpenAI-compatible chat response
-type llmChatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-}
+// LLM request and response types are provided by github.com/openai/openai-go:
+//   Request:  openai.ChatCompletionNewParams
+//   Response: openai.ChatCompletion
 
 // ResolvedLLMConfig holds resolved LLM endpoint configuration from external_models.
 type ResolvedLLMConfig struct {
@@ -329,6 +304,7 @@ type ResolvedLLMConfig struct {
 	TimeoutSeconds int
 	MaxTokens      int
 	Temperature    float64
+	AccessKey      string
 }
 
 // ResolveQueryRewriteConfig resolves the LLM endpoint configuration for query rewriting.
@@ -350,6 +326,7 @@ func ResolveQueryRewriteConfig(routerCfg *config.RouterConfig) *ResolvedLLMConfi
 		TimeoutSeconds: externalCfg.TimeoutSeconds,
 		MaxTokens:      externalCfg.MaxTokens,
 		Temperature:    externalCfg.Temperature,
+		AccessKey:      externalCfg.AccessKey,
 	}
 }
 
@@ -371,21 +348,26 @@ func ResolveExtractionConfig(routerCfg *config.RouterConfig) *ResolvedLLMConfig 
 		TimeoutSeconds: externalCfg.TimeoutSeconds,
 		MaxTokens:      externalCfg.MaxTokens,
 		Temperature:    externalCfg.Temperature,
+		AccessKey:      externalCfg.AccessKey,
 	}
 }
 
-// callLLMForQueryRewrite calls the LLM endpoint for query rewriting
+// callLLMForQueryRewrite calls the LLM endpoint for query rewriting.
+// Uses response_format: json_object to enforce JSON output and prevent
+// reasoning model artifacts like <think> tags. Parses {"query": "..."} from response.
 func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, userPrompt string) (string, error) {
-	// Build request with defaults: max_tokens=50, temperature=0.1 for query rewriting
-	reqBody := llmChatRequest{
+	jsonFormat := shared.NewResponseFormatJSONObjectParam()
+	reqBody := openai.ChatCompletionNewParams{
 		Model: resolved.Model,
-		Messages: []llmChatMessage{
-			{Role: "system", Content: queryRewriteSystemPrompt},
-			{Role: "user", Content: userPrompt},
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(queryRewriteSystemPrompt),
+			openai.UserMessage(userPrompt),
 		},
-		MaxTokens:   getMaxTokens(resolved, 50),
-		Temperature: getTemperature(resolved, 0.1),
-		Stream:      false,
+		MaxTokens:   openai.Int(int64(getMaxTokens(resolved, 100))),
+		Temperature: openai.Float(getTemperature(resolved, 0.1)),
+		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &jsonFormat,
+		},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -393,7 +375,6 @@ func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, us
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Create HTTP request - endpoint should be OpenAI-compatible base URL
 	url := fmt.Sprintf("%s/v1/chat/completions", strings.TrimSuffix(resolved.Endpoint, "/"))
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
 	if err != nil {
@@ -401,8 +382,10 @@ func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, us
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	if resolved.AccessKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+resolved.AccessKey)
+	}
 
-	// Send request with timeout from external_models config
 	timeout := getTimeout(resolved)
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(httpReq)
@@ -415,8 +398,7 @@ func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, us
 		return "", fmt.Errorf("LLM returned status %d", resp.StatusCode)
 	}
 
-	// Parse response
-	var llmResp llmChatResponse
+	var llmResp openai.ChatCompletion
 	if err := json.NewDecoder(resp.Body).Decode(&llmResp); err != nil {
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
@@ -425,7 +407,23 @@ func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, us
 		return "", fmt.Errorf("no choices in LLM response")
 	}
 
-	return llmResp.Choices[0].Message.Content, nil
+	content := llmResp.Choices[0].Message.Content
+
+	// Parse the JSON response to extract the query field
+	var result struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		// Graceful fallback: if JSON parsing fails, use raw content
+		logging.Warnf("Memory: Query rewrite response not valid JSON, using raw: %v", err)
+		return content, nil
+	}
+
+	if result.Query == "" {
+		return content, nil
+	}
+
+	return result.Query, nil
 }
 
 // =============================================================================

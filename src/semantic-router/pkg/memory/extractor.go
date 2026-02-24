@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/shared"
+
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 )
@@ -38,6 +41,7 @@ import (
 type MemoryExtractor struct {
 	endpoint    string       // Resolved LLM endpoint
 	model       string       // Resolved model name
+	accessKey   string       // Optional: Bearer token for LLM endpoint auth
 	client      *http.Client // Reused for connection pooling
 	store       Store        // Optional: for ProcessResponse with deduplication
 	turnCounts  map[string]int
@@ -67,6 +71,7 @@ func NewMemoryExtractorWithStore(routerCfg *config.RouterConfig, batchSize int, 
 	return &MemoryExtractor{
 		endpoint:    resolved.endpoint,
 		model:       resolved.model,
+		accessKey:   resolved.accessKey,
 		client:      &http.Client{Timeout: resolved.timeout},
 		store:       store,
 		turnCounts:  make(map[string]int),
@@ -81,6 +86,7 @@ func NewMemoryExtractorWithStore(routerCfg *config.RouterConfig, batchSize int, 
 type resolvedExtractionConfig struct {
 	endpoint    string
 	model       string
+	accessKey   string
 	timeout     time.Duration
 	maxTokens   int
 	temperature float64
@@ -115,6 +121,7 @@ func resolveExtractionConfig(routerCfg *config.RouterConfig) *resolvedExtraction
 	return &resolvedExtractionConfig{
 		endpoint:    fmt.Sprintf("http://%s:%d", externalCfg.ModelEndpoint.Address, externalCfg.ModelEndpoint.Port),
 		model:       externalCfg.ModelName,
+		accessKey:   externalCfg.AccessKey,
 		timeout:     timeout,
 		maxTokens:   maxTokens,
 		temperature: temperature,
@@ -235,18 +242,22 @@ func (e *MemoryExtractor) ExtractFacts(ctx context.Context, messages []Message) 
 	return facts, nil
 }
 
-// callLLMForExtraction calls the configured LLM endpoint for fact extraction
+// callLLMForExtraction calls the configured LLM endpoint for fact extraction.
+// Uses response_format: json_object to enforce valid JSON output and prevent
+// reasoning model artifacts like <think> tags.
 func (e *MemoryExtractor) callLLMForExtraction(ctx context.Context, userPrompt string) ([]ExtractedFact, error) {
-	// Build request
-	reqBody := llmChatRequest{
+	jsonFormat := shared.NewResponseFormatJSONObjectParam()
+	reqBody := openai.ChatCompletionNewParams{
 		Model: e.model,
-		Messages: []llmChatMessage{
-			{Role: "system", Content: extractionSystemPrompt},
-			{Role: "user", Content: userPrompt},
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(extractionSystemPrompt),
+			openai.UserMessage(userPrompt),
 		},
-		MaxTokens:   e.maxTokens,
-		Temperature: e.temperature,
-		Stream:      false,
+		MaxTokens:   openai.Int(int64(e.maxTokens)),
+		Temperature: openai.Float(e.temperature),
+		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &jsonFormat,
+		},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -254,7 +265,6 @@ func (e *MemoryExtractor) callLLMForExtraction(ctx context.Context, userPrompt s
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Create HTTP request (timeout is set on http.Client during construction)
 	url := fmt.Sprintf("%s/v1/chat/completions", strings.TrimSuffix(e.endpoint, "/"))
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
 	if err != nil {
@@ -262,8 +272,10 @@ func (e *MemoryExtractor) callLLMForExtraction(ctx context.Context, userPrompt s
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	if e.accessKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+e.accessKey)
+	}
 
-	// Send request (using reused client for connection pooling)
 	resp, err := e.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("LLM request failed: %w", err)
@@ -274,8 +286,7 @@ func (e *MemoryExtractor) callLLMForExtraction(ctx context.Context, userPrompt s
 		return nil, fmt.Errorf("LLM returned status %d", resp.StatusCode)
 	}
 
-	// Parse response
-	var llmResp llmChatResponse
+	var llmResp openai.ChatCompletion
 	if err := json.NewDecoder(resp.Body).Decode(&llmResp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
@@ -284,7 +295,6 @@ func (e *MemoryExtractor) callLLMForExtraction(ctx context.Context, userPrompt s
 		return nil, fmt.Errorf("no choices in LLM response")
 	}
 
-	// Parse extracted facts from LLM response
 	content := llmResp.Choices[0].Message.Content
 	return parseExtractedFacts(content)
 }
@@ -458,9 +468,10 @@ func generateMemoryID() string {
 // Response Parsing
 // =============================================================================
 
-// parseExtractedFacts parses the LLM response into ExtractedFact structs
+// parseExtractedFacts parses the LLM response into ExtractedFact structs.
+// Handles both bare JSON arrays and wrapped objects (e.g. {"facts": [...]})
+// since response_format: json_object may cause the model to wrap the array.
 func parseExtractedFacts(content string) ([]ExtractedFact, error) {
-	// Clean up the response - remove markdown code blocks if present
 	content = strings.TrimSpace(content)
 	content = cleanJSONResponse(content)
 
@@ -468,10 +479,21 @@ func parseExtractedFacts(content string) ([]ExtractedFact, error) {
 		return nil, nil
 	}
 
-	// Parse JSON array
+	// Try parsing as a JSON array first
 	var facts []ExtractedFact
 	if err := json.Unmarshal([]byte(content), &facts); err != nil {
-		return nil, fmt.Errorf("failed to parse facts JSON: %w (content: %s)", err, truncateForLog(content, 100))
+		// json_object mode may produce a wrapper object like {"facts": [...]}
+		var wrapper map[string]json.RawMessage
+		if wErr := json.Unmarshal([]byte(content), &wrapper); wErr == nil {
+			for _, v := range wrapper {
+				if jErr := json.Unmarshal(v, &facts); jErr == nil && len(facts) > 0 {
+					break
+				}
+			}
+		}
+		if len(facts) == 0 {
+			return nil, fmt.Errorf("failed to parse facts JSON: %w (content: %s)", err, truncateForLog(content, 100))
+		}
 	}
 
 	// Validate and filter facts
@@ -498,7 +520,9 @@ func parseExtractedFacts(content string) ([]ExtractedFact, error) {
 	return validFacts, nil
 }
 
-// cleanJSONResponse removes markdown code blocks and other formatting from LLM response
+// cleanJSONResponse removes markdown code blocks and other formatting from LLM response.
+// Note: <think> tag stripping is no longer needed because we use response_format: json_object
+// which constrains the model to produce only valid JSON tokens at decode time.
 func cleanJSONResponse(content string) string {
 	// Remove markdown code blocks
 	// Match ```json ... ``` or ``` ... ```
@@ -507,7 +531,6 @@ func cleanJSONResponse(content string) string {
 		content = matches[1]
 	}
 
-	// Trim whitespace
 	content = strings.TrimSpace(content)
 
 	return content
@@ -548,32 +571,9 @@ func truncateForLog(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// =============================================================================
-// LLM Client Types (shared with req_filter_memory.go)
-// =============================================================================
-
-// llmChatRequest represents an OpenAI-compatible chat request
-type llmChatRequest struct {
-	Model       string           `json:"model"`
-	Messages    []llmChatMessage `json:"messages"`
-	MaxTokens   int              `json:"max_tokens,omitempty"`
-	Temperature float64          `json:"temperature,omitempty"`
-	Stream      bool             `json:"stream"`
-}
-
-type llmChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// llmChatResponse represents an OpenAI-compatible chat response
-type llmChatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-}
+// LLM request and response types are provided by github.com/openai/openai-go:
+//   Request:  openai.ChatCompletionNewParams
+//   Response: openai.ChatCompletion
 
 // =============================================================================
 // Utility Functions

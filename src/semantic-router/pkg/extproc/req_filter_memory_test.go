@@ -563,12 +563,18 @@ func TestBuildSearchQuery_NoExternalModel(t *testing.T) {
 func TestBuildSearchQuery_WithMockLLM(t *testing.T) {
 	// Create mock LLM server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
 		assert.Equal(t, "/v1/chat/completions", r.URL.Path)
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 
-		// Parse request body
-		var req llmChatRequest
+		// Parse request body using local struct matching OpenAI JSON shape
+		var req struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+			ResponseFormat map[string]string `json:"response_format"`
+		}
 		err := json.NewDecoder(r.Body).Decode(&req)
 		require.NoError(t, err)
 
@@ -578,17 +584,21 @@ func TestBuildSearchQuery_WithMockLLM(t *testing.T) {
 		assert.Equal(t, "user", req.Messages[1].Role)
 		assert.Contains(t, req.Messages[1].Content, "How much?")
 		assert.Contains(t, req.Messages[1].Content, "Hawaii")
+		assert.Equal(t, "json_object", req.ResponseFormat["type"])
 
-		// Return mock response
-		resp := llmChatResponse{
-			Choices: []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			}{
-				{Message: struct {
-					Content string `json:"content"`
-				}{Content: "What is the budget for the Hawaii vacation?"}},
+		// Return mock response as openai.ChatCompletion JSON with JSON content
+		resp := map[string]interface{}{
+			"id":     "test-id",
+			"object": "chat.completion",
+			"choices": []map[string]interface{}{
+				{
+					"index":         0,
+					"finish_reason": "stop",
+					"message": map[string]interface{}{
+						"role":    "assistant",
+						"content": `{"query": "What is the budget for the Hawaii vacation?"}`,
+					},
+				},
 			},
 		}
 
@@ -610,17 +620,13 @@ func TestBuildSearchQuery_WithMockLLM(t *testing.T) {
 }
 
 func TestBuildSearchQuery_SelfContainedQuery(t *testing.T) {
-	// Create mock LLM server that returns the query unchanged
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := llmChatResponse{
-			Choices: []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			}{
-				{Message: struct {
-					Content string `json:"content"`
-				}{Content: "What is the capital of France?"}}, // Unchanged
+		resp := map[string]interface{}{
+			"id": "test-id", "object": "chat.completion",
+			"choices": []map[string]interface{}{
+				{"index": 0, "finish_reason": "stop", "message": map[string]interface{}{
+					"role": "assistant", "content": `{"query": "What is the capital of France?"}`,
+				}},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -649,17 +655,14 @@ func TestBuildSearchQuery_LLMError_FallbackToOriginal(t *testing.T) {
 }
 
 func TestBuildSearchQuery_CleanupQuotes(t *testing.T) {
-	// Create mock LLM server that returns quoted response
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := llmChatResponse{
-			Choices: []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			}{
-				{Message: struct {
-					Content string `json:"content"`
-				}{Content: `"What is my budget for Hawaii?"`}}, // With quotes
+		// With json_object format, graceful fallback still strips surrounding quotes
+		resp := map[string]interface{}{
+			"id": "test-id", "object": "chat.completion",
+			"choices": []map[string]interface{}{
+				{"index": 0, "finish_reason": "stop", "message": map[string]interface{}{
+					"role": "assistant", "content": `{"query": "What is my budget for Hawaii?"}`,
+				}},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -670,21 +673,17 @@ func TestBuildSearchQuery_CleanupQuotes(t *testing.T) {
 	routerCfg := createMockRouterConfig(server.URL)
 	result, err := BuildSearchQuery(context.Background(), nil, "How much?", routerCfg)
 	require.NoError(t, err)
-	assert.Equal(t, "What is my budget for Hawaii?", result, "should strip quotes")
+	assert.Equal(t, "What is my budget for Hawaii?", result)
 }
 
 func TestBuildSearchQuery_CleanupWhitespace(t *testing.T) {
-	// Create mock LLM server that returns response with whitespace
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := llmChatResponse{
-			Choices: []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			}{
-				{Message: struct {
-					Content string `json:"content"`
-				}{Content: "  What is the budget?  \n"}}, // With whitespace
+		resp := map[string]interface{}{
+			"id": "test-id", "object": "chat.completion",
+			"choices": []map[string]interface{}{
+				{"index": 0, "finish_reason": "stop", "message": map[string]interface{}{
+					"role": "assistant", "content": `{"query": "  What is the budget?  "}`,
+				}},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -700,14 +699,10 @@ func TestBuildSearchQuery_CleanupWhitespace(t *testing.T) {
 }
 
 func TestBuildSearchQuery_EmptyChoices(t *testing.T) {
-	// Create mock LLM server that returns empty choices
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := llmChatResponse{
-			Choices: []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			}{}, // Empty
+		resp := map[string]interface{}{
+			"id": "test-id", "object": "chat.completion",
+			"choices": []map[string]interface{}{},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)

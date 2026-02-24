@@ -813,6 +813,12 @@ func (r *OpenAIRouter) createSpecifiedModelResponse(model string, upstreamModel 
 		logging.Infof("Model name rewriting: %s -> %s in request body", model, upstreamModel)
 	}
 
+	// Memory context injection: for specified models, inject here since
+	// modifyRequestBodyForAutoRouting is not called
+	if ctx != nil && ctx.MemoryContext != "" {
+		needsBodyMutation = true
+	}
+
 	// Set :path from provider profile, or use Response API override
 	if ctx != nil && ctx.ResponseAPICtx != nil && ctx.ResponseAPICtx.IsResponseAPIRequest {
 		setHeaders = append(setHeaders, &core.HeaderValueOption{
@@ -857,6 +863,17 @@ func (r *OpenAIRouter) createSpecifiedModelResponse(model string, upstreamModel 
 				logging.Warnf("Failed to rewrite model in body: %v, sending original body", err)
 			} else {
 				bodyBytes = rewritten
+			}
+		}
+
+		// Inject memory context into body for specified models
+		if ctx != nil && ctx.MemoryContext != "" && len(bodyBytes) > 0 {
+			injected, err := injectSystemMessage(bodyBytes, ctx.MemoryContext)
+			if err != nil {
+				logging.Warnf("Memory: Failed to inject memory context in specified model body: %v", err)
+			} else {
+				bodyBytes = injected
+				logging.Infof("Memory: Injected memory context into specified model body")
 			}
 		}
 
