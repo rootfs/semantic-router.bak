@@ -165,6 +165,26 @@ func TestExtractFacts_MarkdownCodeBlock(t *testing.T) {
 	assert.Equal(t, "User likes coffee", facts[0].Content)
 }
 
+func TestExtractFacts_ThinkTagsFromLLM(t *testing.T) {
+	// vLLM with reasoning models may emit <think> tags even with json_object mode
+	mockResponse := "<think>\nLet me analyze the conversation...\n</think>\n" +
+		`[{"type": "semantic", "content": "User likes coffee"}]`
+	server := createMockLLMServer(t, mockResponse)
+	defer server.Close()
+
+	routerCfg := createMockRouterConfig(server.URL)
+	extractor := NewMemoryExtractorWithStore(routerCfg, 10, nil)
+
+	messages := []Message{
+		{Role: "user", Content: "I love coffee"},
+	}
+
+	facts, err := extractor.ExtractFacts(context.Background(), messages)
+	require.NoError(t, err)
+	require.Len(t, facts, 1)
+	assert.Equal(t, "User likes coffee", facts[0].Content)
+}
+
 func TestExtractFacts_LLMError(t *testing.T) {
 	// Create server that returns error
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,11 +223,11 @@ func TestExtractFacts_InvalidJSON(t *testing.T) {
 	assert.Nil(t, facts, "should return nil on parse failure")
 }
 
-func TestExtractFacts_InvalidType(t *testing.T) {
-	// LLM returns invalid memory type - should be filtered
+func TestExtractFacts_UnknownTypeFallsBackToSemantic(t *testing.T) {
+	// LLM returns non-standard types — should map to semantic
 	mockResponse := `[
 		{"type": "semantic", "content": "Valid fact"},
-		{"type": "invalid_type", "content": "Should be skipped"},
+		{"type": "identity", "content": "User name is Alex"},
 		{"type": "procedural", "content": "Another valid fact"}
 	]`
 	server := createMockLLMServer(t, mockResponse)
@@ -222,10 +242,11 @@ func TestExtractFacts_InvalidType(t *testing.T) {
 
 	facts, err := extractor.ExtractFacts(context.Background(), messages)
 	require.NoError(t, err)
-	require.Len(t, facts, 2, "should filter out invalid type")
+	require.Len(t, facts, 3, "unknown types should map to semantic, not be filtered")
 
-	assert.Equal(t, "Valid fact", facts[0].Content)
-	assert.Equal(t, "Another valid fact", facts[1].Content)
+	assert.Equal(t, MemoryTypeSemantic, facts[0].Type)
+	assert.Equal(t, MemoryTypeSemantic, facts[1].Type) // "identity" → semantic
+	assert.Equal(t, MemoryTypeProcedural, facts[2].Type)
 }
 
 func TestExtractFacts_EmptyContent(t *testing.T) {
@@ -359,10 +380,6 @@ func TestParseExtractedFacts_InvalidJSON(t *testing.T) {
 			name:  "incomplete json",
 			input: `[{"type": "semantic"`,
 		},
-		{
-			name:  "wrong structure",
-			input: `{"type": "semantic", "content": "fact"}`, // not an array
-		},
 	}
 
 	for _, tt := range tests {
@@ -372,6 +389,16 @@ func TestParseExtractedFacts_InvalidJSON(t *testing.T) {
 			assert.Nil(t, facts)
 		})
 	}
+}
+
+func TestParseExtractedFacts_SingleObject(t *testing.T) {
+	// Model sometimes returns a single object instead of an array
+	input := `{"type": "semantic", "content": "User works at Stripe"}`
+	facts, err := parseExtractedFacts(input)
+	require.NoError(t, err)
+	require.Len(t, facts, 1)
+	assert.Equal(t, MemoryTypeSemantic, facts[0].Type)
+	assert.Equal(t, "User works at Stripe", facts[0].Content)
 }
 
 // =============================================================================
@@ -391,9 +418,13 @@ func TestNormalizeMemoryType(t *testing.T) {
 		{"PROCEDURAL", MemoryTypeProcedural},
 		{"episodic", MemoryTypeEpisodic},
 		{"EPISODIC", MemoryTypeEpisodic},
-		{"invalid", ""},
 		{"", ""},
-		{"unknown_type", ""},
+		// Unknown non-empty types now fall back to semantic
+		{"identity", MemoryTypeSemantic},
+		{"preference", MemoryTypeSemantic},
+		{"health", MemoryTypeSemantic},
+		{"occupation", MemoryTypeSemantic},
+		{"unknown_type", MemoryTypeSemantic},
 	}
 
 	for _, tt := range tests {
@@ -434,6 +465,31 @@ func TestCleanJSONResponse(t *testing.T) {
 			input:    "  \n[{\"type\": \"semantic\"}]\n  ",
 			expected: `[{"type": "semantic"}]`,
 		},
+		{
+			name:     "think tags wrapping json",
+			input:    "<think>\nLet me extract facts...\n</think>\n[{\"type\": \"semantic\"}]",
+			expected: `[{"type": "semantic"}]`,
+		},
+		{
+			name:     "think tags with multiline reasoning",
+			input:    "<think>\nThe user mentioned their budget.\nI should extract that as a semantic fact.\n</think>\n[{\"type\": \"semantic\", \"content\": \"Budget is $10K\"}]",
+			expected: `[{"type": "semantic", "content": "Budget is $10K"}]`,
+		},
+		{
+			name:     "unclosed think tag with no json (token limit mid-thought)",
+			input:    "<think>\nLet me analyze this conversation and find the important",
+			expected: "",
+		},
+		{
+			name:     "json embedded inside unclosed think tag",
+			input:    `<think>{"type": "semantic", "content": "User likes coffee"}`,
+			expected: `{"type": "semantic", "content": "User likes coffee"}`,
+		},
+		{
+			name:     "json array inside unclosed think tag",
+			input:    `<think>[{"type": "semantic", "content": "User likes coffee"}]`,
+			expected: `[{"type": "semantic", "content": "User likes coffee"}]`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -442,6 +498,67 @@ func TestCleanJSONResponse(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestRecoverTruncatedJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{
+			name:     "truncated after first complete object",
+			input:    `[{"type": "semantic", "content": "Fact A"}, {"type": "sem`,
+			expected: 1,
+		},
+		{
+			name:     "truncated after two complete objects",
+			input:    `[{"type": "semantic", "content": "A"}, {"type": "semantic", "content": "B"}, {"type":`,
+			expected: 2,
+		},
+		{
+			name:     "not an array",
+			input:    `{"type": "semantic", "content": "A"`,
+			expected: 0,
+		},
+		{
+			name:     "no complete objects",
+			input:    `[{"type": "sema`,
+			expected: 0,
+		},
+		{
+			name:     "valid complete array (no truncation)",
+			input:    `[{"type": "semantic", "content": "A"}]`,
+			expected: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			facts := recoverTruncatedJSON(tt.input)
+			assert.Len(t, facts, tt.expected)
+		})
+	}
+}
+
+func TestParseExtractedFacts_ThinkTags(t *testing.T) {
+	input := "<think>\nLet me extract facts from this conversation.\n</think>\n" +
+		`[{"type": "semantic", "content": "User's budget is $10,000"}]`
+
+	facts, err := parseExtractedFacts(input)
+	require.NoError(t, err)
+	require.Len(t, facts, 1)
+	assert.Equal(t, "User's budget is $10,000", facts[0].Content)
+}
+
+func TestParseExtractedFacts_TruncatedArray(t *testing.T) {
+	input := `[{"type": "semantic", "content": "Fact A"}, {"type": "semantic", "content": "Fact B"}, {"type": "sem`
+
+	facts, err := parseExtractedFacts(input)
+	require.NoError(t, err)
+	require.Len(t, facts, 2)
+	assert.Equal(t, "Fact A", facts[0].Content)
+	assert.Equal(t, "Fact B", facts[1].Content)
 }
 
 // =============================================================================

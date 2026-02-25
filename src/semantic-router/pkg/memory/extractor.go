@@ -110,7 +110,7 @@ func resolveExtractionConfig(routerCfg *config.RouterConfig) *resolvedExtraction
 
 	maxTokens := externalCfg.MaxTokens
 	if maxTokens <= 0 {
-		maxTokens = 500 // default for extraction
+		maxTokens = 2048 // default — 500 was too small for long conversations
 	}
 
 	temperature := externalCfg.Temperature
@@ -145,42 +145,26 @@ CRITICAL RULES:
 2. DO NOT extract assistant suggestions, recommendations, or general knowledge
 3. ALWAYS include context - never extract isolated values
 4. Use self-contained phrases that make sense without the conversation
-5. Return ONLY valid JSON - no explanations or markdown
+5. Return ONLY a valid JSON array - no explanations, no markdown, no thinking
 6. ALWAYS phrase facts as STATEMENTS, never as questions
 7. Include CONSTRAINTS and LIMITATIONS explicitly (cannot, must not, excluded, etc.)
+8. The "type" field MUST be exactly one of: "semantic", "procedural", or "episodic" — no other values
 
-MEMORY TYPES:
+MEMORY TYPES (use ONLY these three values for "type"):
 
-"semantic" - User's facts, preferences, constraints, knowledge:
-  - Personal info: "User's name is Alex", "User works at Acme Corp"
-  - Preferences: "User prefers window seats", "User likes spicy food"
-  - Constraints: "User is allergic to shellfish", "User's budget is $5000"
-  - Limitations: "User cannot use AWS", "User must deploy on Azure only"
-  - Tech stack: "User's project uses React frontend and Go backend"
-  - Knowledge: "User knows Python and Go", "User studied at MIT"
+"semantic" — facts, preferences, identity, constraints, knowledge about the user:
+  Examples: name, job, allergies, preferences, tech stack, budget, limitations
 
-"procedural" - User's personal workflows, routines, or processes they EXPLICITLY describe:
-  - "User's morning routine: check Slack, review PRs, then standup at 9am"
-  - "User deploys code by: running tests, then pushing to staging, then production"
-  - "User prefers to debug by: adding logs first, then using breakpoints"
-  NOTE: This is for USER's own processes, NOT assistant recommendations!
+"procedural" — user's personal workflows or routines they explicitly describe:
+  Examples: morning routine, deployment process, debugging approach
 
-WHAT NOT TO EXTRACT:
-- Assistant suggestions ("You should try the seafood restaurant")
-- General knowledge ("Python is a programming language")
-- Hypotheticals ("If I had more time, I would...")
-- Questions (never phrase as "What is user's budget?" - use statements!)
+"episodic" — specific events or experiences the user describes:
+  Examples: "User visited Paris in June 2025", "User attended AWS re:Invent 2024"
 
-EXAMPLES:
-GOOD: [{"type": "semantic", "content": "User is lactose intolerant"}]
-GOOD: [{"type": "semantic", "content": "User's project deadline is March 15th"}]
-GOOD: [{"type": "semantic", "content": "User cannot use AWS due to company policy"}]
-GOOD: [{"type": "semantic", "content": "User's tech stack is React, Go, and PostgreSQL"}]
-GOOD: [{"type": "procedural", "content": "User's code review process: check tests, review logic, then check style"}]
-BAD:  [{"type": "semantic", "content": "What is the user's budget?"}] (question form - use statement!)
-BAD:  [{"type": "procedural", "content": "To improve code: add more tests"}] (assistant advice, not user's process)
+OUTPUT FORMAT — return a JSON array of objects with exactly two fields:
+  [{"type": "semantic", "content": "..."}, ...]
 
-Return JSON array. Empty array [] if nothing worth remembering about the USER.`
+Return [] if nothing worth remembering about the USER.`
 
 // ExtractFacts extracts memorable facts from a conversation using an LLM.
 // This is a pure extraction function - it does NOT store the facts.
@@ -296,6 +280,7 @@ func (e *MemoryExtractor) callLLMForExtraction(ctx context.Context, userPrompt s
 	}
 
 	content := llmResp.Choices[0].Message.Content
+	logging.Debugf("Memory extraction raw LLM content (%d chars): %s", len(content), truncateForLog(content, 200))
 	return parseExtractedFacts(content)
 }
 
@@ -471,6 +456,7 @@ func generateMemoryID() string {
 // parseExtractedFacts parses the LLM response into ExtractedFact structs.
 // Handles both bare JSON arrays and wrapped objects (e.g. {"facts": [...]})
 // since response_format: json_object may cause the model to wrap the array.
+// Also recovers partial results from truncated JSON arrays (token limit hit).
 func parseExtractedFacts(content string) ([]ExtractedFact, error) {
 	content = strings.TrimSpace(content)
 	content = cleanJSONResponse(content)
@@ -482,13 +468,32 @@ func parseExtractedFacts(content string) ([]ExtractedFact, error) {
 	// Try parsing as a JSON array first
 	var facts []ExtractedFact
 	if err := json.Unmarshal([]byte(content), &facts); err != nil {
-		// json_object mode may produce a wrapper object like {"facts": [...]}
-		var wrapper map[string]json.RawMessage
-		if wErr := json.Unmarshal([]byte(content), &wrapper); wErr == nil {
-			for _, v := range wrapper {
-				if jErr := json.Unmarshal(v, &facts); jErr == nil && len(facts) > 0 {
-					break
+		// Try as a single object (model sometimes omits the array wrapper)
+		var single ExtractedFact
+		if sErr := json.Unmarshal([]byte(content), &single); sErr == nil && single.Content != "" {
+			facts = []ExtractedFact{single}
+		}
+		// Try as a wrapper object like {"facts": [...]} or {"memories": [...]}
+		if len(facts) == 0 {
+			var wrapper map[string]json.RawMessage
+			if wErr := json.Unmarshal([]byte(content), &wrapper); wErr == nil {
+				for _, v := range wrapper {
+					if jErr := json.Unmarshal(v, &facts); jErr == nil && len(facts) > 0 {
+						break
+					}
+					// Also try unwrapping single objects inside wrapper values
+					var singleInner ExtractedFact
+					if jErr := json.Unmarshal(v, &singleInner); jErr == nil && singleInner.Content != "" {
+						facts = append(facts, singleInner)
+					}
 				}
+			}
+		}
+		// Try recovering from truncated JSON array
+		if len(facts) == 0 {
+			if recovered := recoverTruncatedJSON(content); len(recovered) > 0 {
+				logging.Warnf("Memory: Recovered %d facts from truncated JSON", len(recovered))
+				facts = recovered
 			}
 		}
 		if len(facts) == 0 {
@@ -504,10 +509,9 @@ func parseExtractedFacts(content string) ([]ExtractedFact, error) {
 			continue
 		}
 
-		// Normalize type
+		// Normalize type (empty content was already filtered above)
 		normalizedType := normalizeMemoryType(string(fact.Type))
 		if normalizedType == "" {
-			logging.Warnf("Memory: Skipping fact with invalid type: %s", fact.Type)
 			continue
 		}
 
@@ -520,23 +524,79 @@ func parseExtractedFacts(content string) ([]ExtractedFact, error) {
 	return validFacts, nil
 }
 
-// cleanJSONResponse removes markdown code blocks and other formatting from LLM response.
-// Note: <think> tag stripping is no longer needed because we use response_format: json_object
-// which constrains the model to produce only valid JSON tokens at decode time.
+// recoverTruncatedJSON attempts to salvage complete JSON objects from a
+// truncated array. When the model hits the token limit mid-output, the JSON
+// array is cut off (e.g. `[{"type":"semantic","content":"A"},{"type":"sem`).
+// We find the last complete object boundary and re-close the array.
+func recoverTruncatedJSON(content string) []ExtractedFact {
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "[") {
+		return nil
+	}
+
+	// Find the last complete object: look for "}," or "}" followed by truncation
+	lastComplete := strings.LastIndex(content, "}")
+	if lastComplete < 0 {
+		return nil
+	}
+
+	// Slice up to and including the last "}", then close the array
+	recovered := content[:lastComplete+1]
+	if !strings.HasSuffix(recovered, "]") {
+		recovered = strings.TrimRight(recovered, ", \t\n") + "]"
+	}
+
+	var facts []ExtractedFact
+	if err := json.Unmarshal([]byte(recovered), &facts); err != nil {
+		return nil
+	}
+	return facts
+}
+
+// cleanJSONResponse removes markdown code blocks, <think> tags, and other
+// formatting artifacts from LLM output before JSON parsing.
+//
+// Even with response_format: json_object, some reasoning models (e.g. MiniMax-M2.1
+// via vLLM) still emit <think>...</think> blocks. The JSON may appear after, before,
+// or even INSIDE the think tags (when </think> is missing).
 func cleanJSONResponse(content string) string {
+	// Strip closed <think>...</think> blocks.
+	thinkPattern := regexp.MustCompile(`(?s)<think>.*?</think>`)
+	content = thinkPattern.ReplaceAllString(content, "")
+	content = strings.TrimSpace(content)
+
+	// If nothing remains or content still starts with <think> (unclosed),
+	// extract JSON by finding the first [ or { in the original/remaining text.
+	if content == "" || strings.HasPrefix(content, "<") {
+		content = extractJSONFromContent(content)
+	}
+
 	// Remove markdown code blocks
-	// Match ```json ... ``` or ``` ... ```
 	codeBlockPattern := regexp.MustCompile("(?s)```(?:json)?\\s*(.+?)\\s*```")
 	if matches := codeBlockPattern.FindStringSubmatch(content); len(matches) > 1 {
 		content = matches[1]
 	}
 
-	content = strings.TrimSpace(content)
-
-	return content
+	return strings.TrimSpace(content)
 }
 
-// normalizeMemoryType converts string to MemoryType, returns empty string if invalid
+// extractJSONFromContent finds the first JSON array or object in a string,
+// regardless of surrounding non-JSON text (think tags, prose, etc.).
+func extractJSONFromContent(content string) string {
+	// Prefer arrays first (our expected format)
+	if idx := strings.Index(content, "["); idx >= 0 {
+		return content[idx:]
+	}
+	// Fall back to object (wrapper like {"facts": [...]})
+	if idx := strings.Index(content, "{"); idx >= 0 {
+		return content[idx:]
+	}
+	return ""
+}
+
+// normalizeMemoryType converts string to MemoryType.
+// Unrecognized types default to semantic because most facts are semantic and
+// some models invent their own taxonomy (identity, preference, health, etc.).
 func normalizeMemoryType(typeStr string) MemoryType {
 	switch strings.ToLower(strings.TrimSpace(typeStr)) {
 	case "semantic":
@@ -546,7 +606,11 @@ func normalizeMemoryType(typeStr string) MemoryType {
 	case "episodic":
 		return MemoryTypeEpisodic
 	default:
-		return ""
+		if typeStr == "" {
+			return ""
+		}
+		logging.Debugf("Memory: Mapping unknown type %q to semantic", typeStr)
+		return MemoryTypeSemantic
 	}
 }
 
