@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/shared"
 
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/memory"
@@ -173,8 +172,6 @@ func getTimeout(resolved *ResolvedLLMConfig) time.Duration {
 }
 
 // queryRewriteSystemPrompt is the system prompt for query rewriting.
-// Returns JSON to leverage response_format: json_object which prevents
-// reasoning model artifacts like <think> tags.
 const queryRewriteSystemPrompt = `You are a query rewriter for semantic search in a memory database.
 
 Given conversation history and a user query, rewrite the query to be self-contained
@@ -191,28 +188,28 @@ CRITICAL RULES:
 - Include CONSTRAINTS when relevant (cannot use X, must use Y, excluded, limitations)
 - For tech/deployment queries, include any mentioned technologies or platforms
 - If the query is already self-contained, return it unchanged
-- Return ONLY a JSON object with a single "query" field
+- Return ONLY the rewritten query text, nothing else
 
 EXAMPLES:
 History: [user]: My project budget is $50,000 and deadline is March 15th
 Query: When is the deadline?
-Output: {"query": "When is the deadline for my $50,000 project?"}
+Output: When is the deadline for my $50,000 project?
 
 History: [user]: I'm building an e-commerce platform
 Query: I prefer React for frontend and Go for backend
-Output: {"query": "I prefer React for frontend and Go for backend for my e-commerce platform"}
+Output: I prefer React for frontend and Go for backend for my e-commerce platform
 
 History: [user]: I prefer React for frontend and Go for backend
 Query: What tech should I use?
-Output: {"query": "What tech stack should I use considering my preference for React frontend and Go backend?"}
+Output: What tech stack should I use considering my preference for React frontend and Go backend?
 
 History: [user]: We cannot use AWS, must deploy on Azure
 Query: Where can I deploy?
-Output: {"query": "Where can I deploy my project given I cannot use AWS and must use Azure?"}
+Output: Where can I deploy my project given I cannot use AWS and must use Azure?
 
 History: (no relevant context)
 Query: What is my budget?
-Output: {"query": "What is my project budget?"}`
+Output: What is my project budget?`
 
 // BuildSearchQuery rewrites a query with conversation context for semantic search.
 // It uses an LLM to understand context and produce a self-contained query.
@@ -353,10 +350,8 @@ func ResolveExtractionConfig(routerCfg *config.RouterConfig) *ResolvedLLMConfig 
 }
 
 // callLLMForQueryRewrite calls the LLM endpoint for query rewriting.
-// Uses response_format: json_object to enforce JSON output and prevent
-// reasoning model artifacts like <think> tags. Parses {"query": "..."} from response.
+// Returns the rewritten query as plain text. Think tags are stripped.
 func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, userPrompt string) (string, error) {
-	jsonFormat := shared.NewResponseFormatJSONObjectParam()
 	reqBody := openai.ChatCompletionNewParams{
 		Model: resolved.Model,
 		Messages: []openai.ChatCompletionMessageParamUnion{
@@ -365,9 +360,6 @@ func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, us
 		},
 		MaxTokens:   openai.Int(int64(getMaxTokens(resolved, 100))),
 		Temperature: openai.Float(getTemperature(resolved, 0.1)),
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONObject: &jsonFormat,
-		},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -407,23 +399,32 @@ func callLLMForQueryRewrite(ctx context.Context, resolved *ResolvedLLMConfig, us
 		return "", fmt.Errorf("no choices in LLM response")
 	}
 
-	content := llmResp.Choices[0].Message.Content
-
-	// Parse the JSON response to extract the query field
-	var result struct {
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		// Graceful fallback: if JSON parsing fails, use raw content
-		logging.Warnf("Memory: Query rewrite response not valid JSON, using raw: %v", err)
-		return content, nil
+	content := stripThinkTags(llmResp.Choices[0].Message.Content)
+	if content == "" {
+		return "", fmt.Errorf("empty response after stripping think tags")
 	}
 
-	if result.Query == "" {
-		return content, nil
-	}
+	return content, nil
+}
 
-	return result.Query, nil
+// stripThinkTags removes <think>...</think> blocks and unclosed <think> tags
+// from LLM output. Reasoning models emit these even with response_format: json_object.
+var thinkClosedRe = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
+var thinkOpenRe = regexp.MustCompile(`(?s)<think>.*`)
+
+func stripThinkTags(s string) string {
+	s = thinkClosedRe.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+	if s == "" || strings.HasPrefix(s, "<think>") {
+		if idx := strings.Index(s, "{"); idx >= 0 {
+			s = s[idx:]
+		} else if idx := strings.Index(s, "["); idx >= 0 {
+			s = s[idx:]
+		} else {
+			s = thinkOpenRe.ReplaceAllString(s, "")
+		}
+	}
+	return strings.TrimSpace(s)
 }
 
 // =============================================================================

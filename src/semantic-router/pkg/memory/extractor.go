@@ -354,11 +354,14 @@ func (e *MemoryExtractor) ProcessResponse(
 		return nil
 	}
 
-	// Store with deduplication
+	// Store with deduplication — strip think tags from fact content
 	for _, fact := range extracted {
+		fact.Content = stripThinkTags(fact.Content)
+		if fact.Content == "" {
+			continue
+		}
 		if err := e.storeWithDeduplication(ctx, userID, fact); err != nil {
 			logging.Warnf("Failed to store memory with deduplication: %v", err)
-			// Continue with other facts even if one fails
 		}
 	}
 
@@ -618,11 +621,29 @@ func normalizeMemoryType(typeStr string) MemoryType {
 // Helper Functions
 // =============================================================================
 
-// formatMessagesForExtraction formats messages for the LLM extraction prompt
+// stripThinkTags removes <think>...</think> blocks and trailing unclosed
+// <think> from text. Used to clean LLM responses before they enter the
+// memory pipeline (conversation history, extracted facts, rewritten queries).
+var thinkClosedPattern = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
+var thinkUnclosedPattern = regexp.MustCompile(`(?s)<think>.*`)
+
+func stripThinkTags(s string) string {
+	s = thinkClosedPattern.ReplaceAllString(s, "")
+	s = thinkUnclosedPattern.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+
+// formatMessagesForExtraction formats messages for the LLM extraction prompt.
+// Strips <think> tags from assistant responses so reasoning artifacts don't
+// contaminate extraction or get stored as memory content.
 func formatMessagesForExtraction(messages []Message) string {
 	var lines []string
 	for _, msg := range messages {
-		lines = append(lines, fmt.Sprintf("[%s]: %s", msg.Role, msg.Content))
+		content := msg.Content
+		if msg.Role == "assistant" {
+			content = stripThinkTags(content)
+		}
+		lines = append(lines, fmt.Sprintf("[%s]: %s", msg.Role, content))
 	}
 	return strings.Join(lines, "\n")
 }
