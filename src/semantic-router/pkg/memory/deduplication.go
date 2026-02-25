@@ -20,7 +20,7 @@ type DeduplicationConfig struct {
 // DefaultDeduplicationConfig returns default deduplication configuration
 func DefaultDeduplicationConfig() DeduplicationConfig {
 	return DeduplicationConfig{
-		UpdateThreshold: 0.9,
+		UpdateThreshold: 0.95,
 		SearchThreshold: 0.7,
 	}
 }

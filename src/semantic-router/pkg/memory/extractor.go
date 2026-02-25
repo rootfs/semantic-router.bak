@@ -138,17 +138,19 @@ func (e *MemoryExtractor) SetDeduplicationConfig(config DeduplicationConfig) {
 // =============================================================================
 
 // extractionSystemPrompt is the system prompt for fact extraction
-const extractionSystemPrompt = `You are a memory extraction system. Extract important USER information from conversations.
+const extractionSystemPrompt = `You are a memory extraction system. Extract ALL important USER information from conversations.
 
 CRITICAL RULES:
 1. Extract ONLY facts stated by or about the USER
 2. DO NOT extract assistant suggestions, recommendations, or general knowledge
 3. ALWAYS include context - never extract isolated values
 4. Use self-contained phrases that make sense without the conversation
-5. Return ONLY a valid JSON array - no explanations, no markdown, no thinking
+5. Return ONLY valid JSON - no explanations, no markdown, no thinking
 6. ALWAYS phrase facts as STATEMENTS, never as questions
 7. Include CONSTRAINTS and LIMITATIONS explicitly (cannot, must not, excluded, etc.)
 8. The "type" field MUST be exactly one of: "semantic", "procedural", or "episodic" — no other values
+9. Extract MULTIPLE facts when the conversation contains multiple pieces of information
+10. Include dates and times when mentioned (e.g. "User visited Paris in June 2025")
 
 MEMORY TYPES (use ONLY these three values for "type"):
 
@@ -161,10 +163,10 @@ MEMORY TYPES (use ONLY these three values for "type"):
 "episodic" — specific events or experiences the user describes:
   Examples: "User visited Paris in June 2025", "User attended AWS re:Invent 2024"
 
-OUTPUT FORMAT — return a JSON array of objects with exactly two fields:
-  [{"type": "semantic", "content": "..."}, ...]
+OUTPUT FORMAT — return a JSON object with a "facts" key containing an array:
+  {"facts": [{"type": "semantic", "content": "..."}, {"type": "episodic", "content": "..."}]}
 
-Return [] if nothing worth remembering about the USER.`
+Return {"facts": []} if nothing worth remembering about the USER.`
 
 // ExtractFacts extracts memorable facts from a conversation using an LLM.
 // This is a pure extraction function - it does NOT store the facts.
