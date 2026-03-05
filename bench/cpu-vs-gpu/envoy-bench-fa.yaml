@@ -4,7 +4,7 @@ static_resources:
     address:
       socket_address:
         address: 0.0.0.0
-        port_value: 8801
+        port_value: 8802
     filter_chains:
     - filters:
       - name: envoy.filters.network.http_connection_manager
@@ -73,7 +73,7 @@ static_resources:
             address:
               socket_address:
                 address: 127.0.0.1
-                port_value: 50051
+                port_value: 50061
 
   - name: vllm_dynamic_cluster
     connect_timeout: 300s
@@ -92,4 +92,4 @@ admin:
   address:
     socket_address:
       address: "127.0.0.1"
-      port_value: 19000
+      port_value: 19001

@@ -26,6 +26,9 @@ prompt_compression:
   enabled: PROMPT_COMPRESSION_PLACEHOLDER
   max_tokens: PROMPT_COMPRESSION_MAX_TOKENS_PLACEHOLDER
 
+# Enable semi-streaming body processing. Requires Envoy request_body_mode: STREAMED.
+streamed_body_mode: true
+
 prompt_guard:
   enabled: true
   use_mmbert_32k: true
