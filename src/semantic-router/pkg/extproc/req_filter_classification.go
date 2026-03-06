@@ -84,6 +84,7 @@ func (r *OpenAIRouter) performDecisionEvaluation(originalModel string, userConte
 				result.OriginalTokens, result.CompressedTokens, result.Ratio, len(result.KeptIndices))
 			compressedText = result.Compressed
 			skipCompressionSignals = r.Config.PromptCompression.SkipSignalsSet()
+			ctx.CompressedUserContent = compressedText
 		}
 	}
 

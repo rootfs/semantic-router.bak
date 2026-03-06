@@ -150,6 +150,10 @@ type RequestContext struct {
 	RAGSimilarityScore  float32 // Best similarity score from retrieval
 	RAGRetrievalLatency float64 // Retrieval latency in seconds
 
+	// Prompt compression output — stored so memory retrieval can use the
+	// compressed version as the search query for tighter embeddings.
+	CompressedUserContent string // Non-empty when prompt compression fired
+
 	// Memory retrieval tracking
 	// Stores formatted memory context to be injected after system prompt
 	MemoryContext string // Formatted memory context (empty if no memories retrieved)

@@ -951,16 +951,25 @@ func (r *OpenAIRouter) handleMemoryRetrieval(
 		history = []ConversationMessage{}
 	}
 
-	// Step 3: Build search query (with context/rewriting if memory_rewrite external model is configured)
+	// Step 3: Build search query.
+	// When prompt compression produced a compressed version, use it as the base
+	// for the search query. Compressed text has higher signal-to-noise ratio,
+	// which produces tighter embeddings and better retrieval precision.
+	baseQuery := userContent
+	if ctx.CompressedUserContent != "" {
+		baseQuery = ctx.CompressedUserContent
+		logging.Infof("Memory: Using compressed text for search (%d → %d chars)",
+			len(userContent), len(baseQuery))
+	}
 	searchQuery, err := BuildSearchQuery(
 		ctx.TraceContext,
 		history,
-		userContent,
+		baseQuery,
 		r.Config,
 	)
 	if err != nil {
-		logging.Warnf("Memory: Query rewriting failed, using original query: %v", err)
-		searchQuery = userContent
+		logging.Warnf("Memory: Query rewriting failed, using base query: %v", err)
+		searchQuery = baseQuery
 	}
 
 	// Step 4: Get user ID from Response API context or request
