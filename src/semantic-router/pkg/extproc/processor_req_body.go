@@ -167,6 +167,11 @@ func (r *OpenAIRouter) handleRequestBody(v *ext_proc.ProcessingRequest_RequestBo
 	if ctx.ResponseAPICtx != nil && ctx.ResponseAPICtx.IsResponseAPIRequest && len(requestBody) > 0 {
 		ctx.ResponseAPICtx.TranslatedBody = requestBody
 	}
+	// Always persist the (potentially memory-injected) body so specified-model
+	// routing can include it in the ext_proc BodyMutation.
+	if len(requestBody) > 0 {
+		ctx.OriginalRequestBody = requestBody
+	}
 
 	if ctx.MemoryContext != "" {
 		if updatedReq, parseErr := parseOpenAIRequest(requestBody); parseErr == nil {
@@ -786,6 +791,13 @@ func (r *OpenAIRouter) createSpecifiedModelResponse(model string, upstreamModel 
 	if upstreamModel != model {
 		needsBodyMutation = true
 		logging.Infof("Model name rewriting: %s -> %s in request body", model, upstreamModel)
+	}
+
+	// Memory injection: if memories were injected, the body was modified and
+	// must be forwarded to the backend via BodyMutation.
+	if ctx != nil && ctx.MemoryContext != "" {
+		needsBodyMutation = true
+		logging.Infof("Memory injection: forcing body mutation for memory-augmented request (%d chars)", len(ctx.MemoryContext))
 	}
 
 	// Set :path from provider profile, or use Response API override

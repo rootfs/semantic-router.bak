@@ -495,6 +495,65 @@ func TestDecisionEngine_EvaluateDecisionsWithNOTOperator(t *testing.T) {
 	}
 }
 
+func TestDecisionEngine_EmptyANDIsCatchAll(t *testing.T) {
+	engine := NewDecisionEngine(
+		[]config.KeywordRule{},
+		[]config.EmbeddingRule{},
+		[]config.Category{},
+		[]config.Decision{
+			{
+				Name:     "specific",
+				Priority: 100,
+				Rules: config.RuleCombination{
+					Operator: "AND",
+					Conditions: []config.RuleCondition{
+						{Type: "keyword", Name: "code_keywords"},
+					},
+				},
+			},
+			{
+				Name:     "catch-all",
+				Priority: 50,
+				Rules: config.RuleCombination{
+					Operator:   "AND",
+					Conditions: []config.RuleCondition{},
+				},
+			},
+		},
+		"priority",
+	)
+
+	// With no signals, the specific decision should not match, but the
+	// catch-all (AND of empty conditions = vacuous truth) should.
+	result, err := engine.EvaluateDecisionsWithSignals(&SignalMatches{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Expected catch-all decision to match, got nil")
+	}
+	if result.Decision.Name != "catch-all" {
+		t.Errorf("Expected catch-all decision, got %q", result.Decision.Name)
+	}
+	if result.Confidence != 1.0 {
+		t.Errorf("Expected confidence 1.0 for vacuous AND, got %f", result.Confidence)
+	}
+
+	// With keyword signal, the higher-priority specific decision should win.
+	result2, err := engine.EvaluateDecisionsWithSignals(&SignalMatches{
+		KeywordRules: []string{"code_keywords"},
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if result2 == nil {
+		t.Fatal("Expected specific decision to match, got nil")
+	}
+	if result2.Decision.Name != "specific" {
+		t.Errorf("Expected specific decision, got %q", result2.Decision.Name)
+	}
+}
+
 func TestDecisionEngine_LatencyConditionIsIgnored(t *testing.T) {
 	engine := NewDecisionEngine(
 		[]config.KeywordRule{},

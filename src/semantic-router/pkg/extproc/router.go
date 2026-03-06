@@ -979,6 +979,7 @@ func createMemoryStore(cfg *config.RouterConfig) (*memory.MilvusStore, error) {
 	embeddingConfig := memory.EmbeddingConfig{
 		Model:     memory.EmbeddingModelType(embeddingModel),
 		Dimension: cfg.Memory.Milvus.Dimension, // Pass dimension from config for Matryoshka models
+		Layer:     0,                            // Full model (layer 22) for memory — search/RAG needs 100% quality
 	}
 
 	logging.Infof("Memory: Connecting to Milvus at %s, collection=%s", milvusAddress, collectionName)

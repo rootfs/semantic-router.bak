@@ -232,12 +232,13 @@ func (e *DecisionEngine) evalLeaf(
 }
 
 // evalAND returns true only when every child matches; confidence is the average.
+// An empty child list is vacuous truth (always matches), used for catch-all decisions.
 func (e *DecisionEngine) evalAND(
 	children []config.RuleNode,
 	signals *SignalMatches,
 ) (matched bool, confidence float64, matchedRules []string) {
 	if len(children) == 0 {
-		return false, 0, nil
+		return true, 1.0, nil
 	}
 	totalConf := 0.0
 	for _, child := range children {
