@@ -74,7 +74,7 @@ func (r *OpenAIRouter) performDecisionEvaluation(originalModel string, userConte
 	compressedText := evaluationText
 	var skipCompressionSignals map[string]bool
 	if r.Config.PromptCompression.Enabled && r.Config.PromptCompression.MaxTokens > 0 {
-		cfg := buildCompressionConfig(r.Config.PromptCompression)
+		cfg := buildCompressionConfig(r.Config.PromptCompression, r.compressionRules)
 		origTokens := promptcompression.CountTokensApprox(evaluationText)
 		if r.Config.PromptCompression.MinLength > 0 && len(evaluationText) <= r.Config.PromptCompression.MinLength {
 			logging.Infof("[PromptCompression] Skipped: %d chars <= min_length threshold %d", len(evaluationText), r.Config.PromptCompression.MinLength)
@@ -514,7 +514,7 @@ func (r *OpenAIRouter) processUserFeedbackForElo(userFeedbackSignals []string, m
 
 // buildCompressionConfig translates the YAML config into the promptcompression
 // package's Config struct, applying defaults for omitted fields.
-func buildCompressionConfig(pc config.PromptCompressionConfig) promptcompression.Config {
+func buildCompressionConfig(pc config.PromptCompressionConfig, rules *promptcompression.CompressionRules) promptcompression.Config {
 	cfg := promptcompression.DefaultConfig(pc.MaxTokens)
 	if pc.TextRankWeight > 0 {
 		cfg.TextRankWeight = pc.TextRankWeight
@@ -525,8 +525,17 @@ func buildCompressionConfig(pc config.PromptCompressionConfig) promptcompression
 	if pc.TFIDFWeight > 0 {
 		cfg.TFIDFWeight = pc.TFIDFWeight
 	}
+	if pc.InterrogativeWeight > 0 {
+		cfg.InterrogativeWeight = pc.InterrogativeWeight
+	}
+	if pc.SpecificityWeight > 0 {
+		cfg.SpecificityWeight = pc.SpecificityWeight
+	}
 	if pc.PositionDepth > 0 {
 		cfg.PositionDepth = pc.PositionDepth
+	}
+	if rules != nil {
+		cfg.Rules = rules
 	}
 	return cfg
 }

@@ -124,6 +124,166 @@ func (tr *TextRankScorer) ScoreSentencesWithTF(tfVecs []map[string]float64) []fl
 	return tr.scoreSentencesFromTF(n, tfVecs)
 }
 
+// ScoreSentencesWithTFBiased computes query-biased TextRank scores.
+//
+// Instead of uniform random restart ((1-d)/n for all nodes), the teleport
+// probability is proportional to bias[i]. Nodes with high bias (e.g.
+// interrogative sentences) attract more PageRank mass, and their neighbors
+// inherit importance through the graph edges.
+//
+// Reference: Kazemi et al. (2020). "Biased TextRank: Unsupervised
+// Graph-Based Content Extraction." COLING 2020.
+//
+// If all bias values are zero (no interrogative sentences detected),
+// the method falls back to standard uniform TextRank.
+func (tr *TextRankScorer) ScoreSentencesWithTFBiased(tfVecs []map[string]float64, bias []float64) []float64 {
+	n := len(tfVecs)
+	if n == 0 {
+		return nil
+	}
+	if n == 1 {
+		return []float64{1.0}
+	}
+
+	// Check if bias is meaningful; if all zero, use uniform.
+	biasSum := 0.0
+	for _, b := range bias {
+		biasSum += b
+	}
+	if biasSum <= 0 || len(bias) != n {
+		return tr.scoreSentencesFromTF(n, tfVecs)
+	}
+
+	// Normalize bias to sum to 1.0.
+	normalizedBias := make([]float64, n)
+	for i, b := range bias {
+		normalizedBias[i] = b / biasSum
+	}
+
+	return tr.scoreSentencesBiased(n, tfVecs, normalizedBias)
+}
+
+// scoreSentencesBiased is the biased PageRank implementation.
+// The only difference from scoreSentencesFromTF is the teleport term:
+// base[i] = (1-d) * bias[i]  instead of  (1-d)/n.
+func (tr *TextRankScorer) scoreSentencesBiased(n int, tfVecs []map[string]float64, bias []float64) []float64 {
+	weights := getAdjacencyMatrix(n)
+	defer putAdjacencyMatrix(weights)
+
+	norms := make([]float64, n)
+	for i, tf := range tfVecs {
+		var sq float64
+		for _, v := range tf {
+			sq += v * v
+		}
+		norms[i] = math.Sqrt(sq)
+	}
+
+	const parallelThreshold = 64
+	if n >= parallelThreshold {
+		numWorkers := runtime.GOMAXPROCS(0)
+		if numWorkers > n {
+			numWorkers = n
+		}
+		var wg sync.WaitGroup
+		wg.Add(numWorkers)
+		chunkSize := (n + numWorkers - 1) / numWorkers
+		for w := 0; w < numWorkers; w++ {
+			lo := w * chunkSize
+			hi := lo + chunkSize
+			if hi > n {
+				hi = n
+			}
+			go func(lo, hi int) {
+				defer wg.Done()
+				for i := lo; i < hi; i++ {
+					for j := i + 1; j < n; j++ {
+						sim := cosineSimilarityWithNorms(tfVecs[i], tfVecs[j], norms[i], norms[j])
+						weights[i*n+j] = sim
+						weights[j*n+i] = sim
+					}
+				}
+			}(lo, hi)
+		}
+		wg.Wait()
+	} else {
+		for i := 0; i < n; i++ {
+			for j := i + 1; j < n; j++ {
+				sim := cosineSimilarityWithNorms(tfVecs[i], tfVecs[j], norms[i], norms[j])
+				weights[i*n+j] = sim
+				weights[j*n+i] = sim
+			}
+		}
+	}
+
+	outSum := make([]float64, n)
+	for i := 0; i < n; i++ {
+		row := weights[i*n : (i+1)*n]
+		for _, w := range row {
+			outSum[i] += w
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		row := weights[i*n : (i+1)*n]
+		for j := 0; j < n; j++ {
+			if i == j || outSum[j] == 0 {
+				row[j] = 0
+			} else {
+				row[j] /= outSum[j]
+			}
+		}
+	}
+
+	scores := make([]float64, n)
+	for i := range scores {
+		scores[i] = 1.0 / float64(n)
+	}
+
+	d := tr.dampingFactor
+
+	newScores := getFloat64Slice(n)
+	defer putFloat64Slice(newScores)
+
+	for iter := 0; iter < tr.maxIterations; iter++ {
+		maxDelta := 0.0
+		for i := 0; i < n; i++ {
+			var sum float64
+			row := weights[i*n : (i+1)*n]
+			for j := 0; j < n; j++ {
+				sum += row[j] * scores[j]
+			}
+			// Biased teleport: (1-d) * bias[i] instead of (1-d)/n
+			newScores[i] = (1.0-d)*bias[i] + d*sum
+			delta := math.Abs(newScores[i] - scores[i])
+			if delta > maxDelta {
+				maxDelta = delta
+			}
+		}
+		scores, newScores = newScores, scores
+		if maxDelta < tr.convergence {
+			break
+		}
+		for i := range newScores {
+			newScores[i] = 0
+		}
+	}
+
+	maxScore := 0.0
+	for _, s := range scores {
+		if s > maxScore {
+			maxScore = s
+		}
+	}
+	if maxScore > 0 {
+		for i := range scores {
+			scores[i] /= maxScore
+		}
+	}
+
+	return scores
+}
+
 // scoreSentencesFromTF is the shared implementation.
 //
 // GC note: the adjacency matrix is stored as a flat []float64 (row-major) instead

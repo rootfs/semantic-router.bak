@@ -48,51 +48,71 @@ type Config struct {
 	MaxTokens int
 
 	// TextRankWeight controls the contribution of TextRank content-importance
-	// scores. Default: 0.20.
+	// scores. Default: 0.15.
 	TextRankWeight float64
 
 	// PositionWeight controls the contribution of Lost-in-the-Middle position
-	// scores. High weight preserves domain signals at prompt boundaries.
-	// Default: 0.40.
+	// scores. Default: 0.10 (reduced from 0.40 — high position weight
+	// penalizes question sentences in the middle of conversational messages).
 	PositionWeight float64
 
 	// TFIDFWeight controls the contribution of TF-IDF information density
-	// scores. Default: 0.35.
+	// scores. Default: 0.25.
 	TFIDFWeight float64
 
 	// NoveltyWeight controls the contribution of novelty (inverse centrality)
-	// scores. Kept low to avoid displacing domain-representative content with
-	// outlier sentences. Default: 0.05.
+	// scores. Default: 0.05.
 	NoveltyWeight float64
+
+	// InterrogativeWeight controls the contribution of interrogative scores
+	// from rule-based question detection. Default: 0.25.
+	InterrogativeWeight float64
+
+	// SpecificityWeight controls the contribution of entity/specificity
+	// density scores. Default: 0.20.
+	SpecificityWeight float64
 
 	// PositionDepth controls the amplitude of the U-shaped position curve.
 	// 0 = flat (no position bias), 1 = maximum penalty for middle sentences.
-	// Default: 0.5 (middle sentences get half the weight of edges).
+	// Default: 0.3.
 	PositionDepth float64
 
 	// PreserveFirstN always keeps the first N sentences regardless of score.
-	// Motivated by the primacy effect in "Lost in the Middle": the opening
-	// sentences provide critical framing context. Default: 3 (covers system
-	// prompt, jailbreak prefixes, and initial PII in typical LLM API payloads).
+	// Default: 1 (reduced from 3 — only the opening sentence is preserved).
 	PreserveFirstN int
 
 	// PreserveLastN always keeps the last N sentences regardless of score.
-	// Motivated by the recency effect: the final sentences often contain
-	// the user's actual request or question. Default: 2.
+	// Default: 1 (reduced from 2).
 	PreserveLastN int
+
+	// PreserveInterrogative always keeps sentences detected as interrogative
+	// (score > 0 from the rules-based detector) regardless of composite score.
+	// This ensures the user's actual question is never dropped. Default: true.
+	PreserveInterrogative bool
+
+	// Rules holds the loaded compression rules (interrogative patterns,
+	// specificity heuristics). If nil, DefaultRules() is used.
+	Rules *CompressionRules
 }
 
 // DefaultConfig returns a Config with empirically reasonable defaults.
+// The new weight distribution is tuned for retrieval-aware compression:
+// interrogative and specificity signals prevent question sentences from
+// being dropped by position or centrality bias.
 func DefaultConfig(maxTokens int) Config {
 	return Config{
-		MaxTokens:      maxTokens,
-		TextRankWeight: 0.20,
-		PositionWeight: 0.40,
-		TFIDFWeight:    0.35,
-		NoveltyWeight:  0.05,
-		PositionDepth:  0.5,
-		PreserveFirstN: 3,
-		PreserveLastN:  2,
+		MaxTokens:             maxTokens,
+		TextRankWeight:        0.15,
+		PositionWeight:        0.10,
+		TFIDFWeight:           0.25,
+		NoveltyWeight:         0.05,
+		InterrogativeWeight:   0.25,
+		SpecificityWeight:     0.20,
+		PositionDepth:         0.3,
+		PreserveFirstN:        1,
+		PreserveLastN:         1,
+		PreserveInterrogative: true,
+		Rules:                 nil,
 	}
 }
 
@@ -120,14 +140,16 @@ type Result struct {
 
 // ScoredSentence pairs a sentence with its component and composite scores.
 type ScoredSentence struct {
-	Index     int
-	Text      string
-	Tokens    int
-	TextRank  float64
-	Position  float64
-	TFIDF     float64
-	Novelty   float64
-	Composite float64
+	Index         int
+	Text          string
+	Tokens        int
+	TextRank      float64
+	Position      float64
+	TFIDF         float64
+	Novelty       float64
+	Interrogative float64
+	Specificity   float64
+	Composite     float64
 }
 
 // maxSentences caps the number of sentences fed into the TextRank O(n²)
@@ -186,6 +208,11 @@ func Compress(text string, cfg Config) Result {
 	// --- Score computation ---
 	normalizeWeights(&cfg)
 
+	rules := cfg.Rules
+	if rules == nil {
+		rules = DefaultRules()
+	}
+
 	// Pre-compute TF vectors once — shared by TextRank, TF-IDF, and Novelty.
 	tfVecs := make([]map[string]float64, n)
 	for i, tokens := range sentTokens {
@@ -200,10 +227,24 @@ func Compress(text string, cfg Config) Result {
 		tfVecs[i] = tf
 	}
 
-	textRankScores := NewTextRankScorer().ScoreSentencesWithTF(tfVecs)
-	positionScores := PositionWeights(n, cfg.PositionDepth)
-	tfidfScorer := NewTFIDFScorer(sentTokens)
+	// Interrogative scores (rules-driven, computed before TextRank for biasing).
+	var interrogativeScores []float64
+	if cfg.InterrogativeWeight > 0 {
+		interrogativeScores = InterrogativeScores(sentences, rules)
+	}
 
+	// Use biased TextRank when interrogative scores are available.
+	var textRankScores []float64
+	trScorer := NewTextRankScorer()
+	if interrogativeScores != nil {
+		textRankScores = trScorer.ScoreSentencesWithTFBiased(tfVecs, interrogativeScores)
+	} else {
+		textRankScores = trScorer.ScoreSentencesWithTF(tfVecs)
+	}
+
+	positionScores := PositionWeights(n, cfg.PositionDepth)
+
+	tfidfScorer := NewTFIDFScorer(sentTokens)
 	tfidfScores := make([]float64, n)
 	for i := range sentences {
 		tfidfScores[i] = tfidfScorer.ScoreSentenceWithTF(tfVecs[i])
@@ -220,24 +261,40 @@ func Compress(text string, cfg Config) Result {
 		normalizeSlice(noveltyScores)
 	}
 
+	// Specificity scores (rules-driven).
+	var specificityScores []float64
+	if cfg.SpecificityWeight > 0 {
+		specificityScores = SpecificityScores(sentences, sentTokens, tfidfScorer, rules)
+	}
+
 	scored := make([]ScoredSentence, n)
 	for i := range sentences {
-		var nov float64
+		var nov, interr, spec float64
 		if noveltyScores != nil {
 			nov = noveltyScores[i]
 		}
+		if interrogativeScores != nil {
+			interr = interrogativeScores[i]
+		}
+		if specificityScores != nil {
+			spec = specificityScores[i]
+		}
 		scored[i] = ScoredSentence{
-			Index:    i,
-			Text:     sentences[i],
-			Tokens:   sentTokenCounts[i],
-			TextRank: textRankScores[i],
-			Position: positionScores[i],
-			TFIDF:    tfidfScores[i],
-			Novelty:  nov,
+			Index:         i,
+			Text:          sentences[i],
+			Tokens:        sentTokenCounts[i],
+			TextRank:      textRankScores[i],
+			Position:      positionScores[i],
+			TFIDF:         tfidfScores[i],
+			Novelty:       nov,
+			Interrogative: interr,
+			Specificity:   spec,
 			Composite: cfg.TextRankWeight*textRankScores[i] +
 				cfg.PositionWeight*positionScores[i] +
 				cfg.TFIDFWeight*tfidfScores[i] +
-				cfg.NoveltyWeight*nov,
+				cfg.NoveltyWeight*nov +
+				cfg.InterrogativeWeight*interr +
+				cfg.SpecificityWeight*spec,
 		}
 	}
 
@@ -297,6 +354,17 @@ func selectSentences(scored []ScoredSentence, tokenCounts []int, cfg Config) []i
 			kept[i] = true
 			usedTokens += tokenCounts[i]
 			keptCount++
+		}
+	}
+
+	// Reserve interrogative sentences (question preservation)
+	if cfg.PreserveInterrogative {
+		for i := range scored {
+			if !kept[i] && scored[i].Interrogative > 0 && usedTokens+tokenCounts[i] <= budget {
+				kept[i] = true
+				usedTokens += tokenCounts[i]
+				keptCount++
+			}
 		}
 	}
 
@@ -361,20 +429,25 @@ func sampleSentences(sentences []string, n int) []string {
 	return result
 }
 
-// normalizeWeights ensures the four score weights sum to 1.0.
+// normalizeWeights ensures the six score weights sum to 1.0.
 func normalizeWeights(cfg *Config) {
-	total := cfg.TextRankWeight + cfg.PositionWeight + cfg.TFIDFWeight + cfg.NoveltyWeight
+	total := cfg.TextRankWeight + cfg.PositionWeight + cfg.TFIDFWeight +
+		cfg.NoveltyWeight + cfg.InterrogativeWeight + cfg.SpecificityWeight
 	if total <= 0 {
-		cfg.TextRankWeight = 0.25
-		cfg.PositionWeight = 0.25
+		cfg.TextRankWeight = 0.15
+		cfg.PositionWeight = 0.10
 		cfg.TFIDFWeight = 0.25
-		cfg.NoveltyWeight = 0.25
+		cfg.NoveltyWeight = 0.05
+		cfg.InterrogativeWeight = 0.25
+		cfg.SpecificityWeight = 0.20
 		return
 	}
 	cfg.TextRankWeight /= total
 	cfg.PositionWeight /= total
 	cfg.TFIDFWeight /= total
 	cfg.NoveltyWeight /= total
+	cfg.InterrogativeWeight /= total
+	cfg.SpecificityWeight /= total
 }
 
 // normalizeSlice scales values to [0, 1] by dividing by the max.

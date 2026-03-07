@@ -18,6 +18,7 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/classification"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/memory"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/promptcompression"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/ratelimit"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/responsestore"
@@ -52,6 +53,11 @@ type OpenAIRouter struct {
 	// RateLimiter enforces per-user/model rate limits from multiple sources
 	// (Envoy RLS → local limiter). Initialized in NewOpenAIRouter.
 	RateLimiter *ratelimit.RateLimitResolver
+
+	// compressionRules holds the loaded rules for NLP prompt compression
+	// (interrogative detection, specificity scoring). Loaded from the
+	// rules_file path in PromptCompressionConfig.
+	compressionRules *promptcompression.CompressionRules
 }
 
 // Ensure OpenAIRouter implements the ext_proc calls
@@ -417,6 +423,16 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 		logging.Infof("Rate limit resolver initialized with providers: %v", rateLimiter.ProviderNames())
 	}
 
+	// Load compression rules from external YAML if configured.
+	var compressionRules *promptcompression.CompressionRules
+	if cfg.PromptCompression.Enabled && cfg.PromptCompression.RulesFile != "" {
+		compressionRules, err = promptcompression.LoadRules(cfg.PromptCompression.RulesFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load compression rules: %w", err)
+		}
+		logging.Infof("Loaded compression rules from %s", cfg.PromptCompression.RulesFile)
+	}
+
 	router := &OpenAIRouter{
 		Config:               cfg,
 		CategoryDescriptions: categoryDescriptions,
@@ -431,6 +447,7 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 		MemoryExtractor:      memoryExtractor,
 		CredentialResolver:   credResolver,
 		RateLimiter:          rateLimiter,
+		compressionRules:     compressionRules,
 	}
 
 	return router, nil

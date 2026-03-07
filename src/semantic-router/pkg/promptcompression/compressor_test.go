@@ -423,14 +423,12 @@ func TestNormalizeWeights(t *testing.T) {
 }
 
 func TestNormalizeWeightsZero(t *testing.T) {
-	cfg := Config{TextRankWeight: 0, PositionWeight: 0, TFIDFWeight: 0, NoveltyWeight: 0}
+	cfg := Config{}
 	normalizeWeights(&cfg)
-	total := cfg.TextRankWeight + cfg.PositionWeight + cfg.TFIDFWeight + cfg.NoveltyWeight
+	total := cfg.TextRankWeight + cfg.PositionWeight + cfg.TFIDFWeight +
+		cfg.NoveltyWeight + cfg.InterrogativeWeight + cfg.SpecificityWeight
 	if math.Abs(total-1.0) > 1e-10 {
-		t.Errorf("zero weights should default to equal 0.25 each, got total %.10f", total)
-	}
-	if math.Abs(cfg.NoveltyWeight-0.25) > 1e-10 {
-		t.Errorf("zero novelty weight should default to 0.25, got %.10f", cfg.NoveltyWeight)
+		t.Errorf("zero weights should default to sum 1.0, got total %.10f", total)
 	}
 }
 
@@ -448,15 +446,19 @@ func TestNormalizeWeightsThreeOnly(t *testing.T) {
 
 func TestDefaultConfigWeightsSum(t *testing.T) {
 	cfg := DefaultConfig(512)
-	total := cfg.TextRankWeight + cfg.PositionWeight + cfg.TFIDFWeight + cfg.NoveltyWeight
+	total := cfg.TextRankWeight + cfg.PositionWeight + cfg.TFIDFWeight +
+		cfg.NoveltyWeight + cfg.InterrogativeWeight + cfg.SpecificityWeight
 	if math.Abs(total-1.0) > 1e-10 {
 		t.Errorf("default weights should sum to 1.0, got %.10f", total)
 	}
-	if cfg.PreserveFirstN != 3 {
-		t.Errorf("default PreserveFirstN should be 3, got %d", cfg.PreserveFirstN)
+	if cfg.PreserveFirstN != 1 {
+		t.Errorf("default PreserveFirstN should be 1, got %d", cfg.PreserveFirstN)
 	}
-	if cfg.PreserveLastN != 2 {
-		t.Errorf("default PreserveLastN should be 2, got %d", cfg.PreserveLastN)
+	if cfg.PreserveLastN != 1 {
+		t.Errorf("default PreserveLastN should be 1, got %d", cfg.PreserveLastN)
+	}
+	if !cfg.PreserveInterrogative {
+		t.Error("default PreserveInterrogative should be true")
 	}
 }
 

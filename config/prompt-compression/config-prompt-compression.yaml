@@ -1,0 +1,31 @@
+# Example configuration for interrogative-aware prompt compression.
+#
+# This config enables NLP prompt compression with interrogative detection,
+# specificity scoring, and biased TextRank. Compression rules are loaded
+# from an external YAML file for multilingual support and operator
+# customization without code changes.
+#
+# Usage:
+#   make run-router CONFIG_FILE=config/prompt-compression/config-prompt-compression.yaml
+#
+# The rules_file path is relative to the working directory of the router
+# binary, or can be an absolute path.
+
+prompt_compression:
+  enabled: true
+  max_tokens: 512
+  min_length: 200
+  rules_file: "config/prompt-compression/compression-rules.yaml"
+  skip_signals:
+    - "jailbreak"
+    - "pii"
+  # Weight distribution (sum to 1.0):
+  #   interrogative + specificity = 0.45 (retrieval-aware signals)
+  #   textrank + tfidf            = 0.40 (content importance)
+  #   position + novelty          = 0.15 (structural)
+  textrank_weight: 0.15
+  position_weight: 0.10
+  tfidf_weight: 0.25
+  interrogative_weight: 0.25
+  specificity_weight: 0.20
+  position_depth: 0.3

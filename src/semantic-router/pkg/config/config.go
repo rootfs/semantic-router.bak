@@ -1528,16 +1528,27 @@ type PromptCompressionConfig struct {
 	// Default: ["jailbreak", "pii"] when omitted.
 	SkipSignals []string `yaml:"skip_signals,omitempty"`
 
-	// TextRankWeight controls the contribution of TextRank content-importance scores. Default: 0.20.
+	// RulesFile is the path to the compression-rules YAML file containing
+	// interrogative markers, specificity patterns, and scoring tiers.
+	// If empty, built-in English-only defaults are used.
+	RulesFile string `yaml:"rules_file,omitempty"`
+
+	// TextRankWeight controls the contribution of TextRank content-importance scores. Default: 0.15.
 	TextRankWeight float64 `yaml:"textrank_weight,omitempty"`
 
-	// PositionWeight controls the contribution of Lost-in-the-Middle position scores. Default: 0.40.
+	// PositionWeight controls the contribution of Lost-in-the-Middle position scores. Default: 0.10.
 	PositionWeight float64 `yaml:"position_weight,omitempty"`
 
-	// TFIDFWeight controls the contribution of TF-IDF information density scores. Default: 0.35.
+	// TFIDFWeight controls the contribution of TF-IDF information density scores. Default: 0.25.
 	TFIDFWeight float64 `yaml:"tfidf_weight,omitempty"`
 
-	// PositionDepth controls the amplitude of the U-shaped position curve (0–1). Default: 0.5.
+	// InterrogativeWeight controls the contribution of interrogative detection scores. Default: 0.25.
+	InterrogativeWeight float64 `yaml:"interrogative_weight,omitempty"`
+
+	// SpecificityWeight controls the contribution of entity/specificity density scores. Default: 0.20.
+	SpecificityWeight float64 `yaml:"specificity_weight,omitempty"`
+
+	// PositionDepth controls the amplitude of the U-shaped position curve (0–1). Default: 0.3.
 	PositionDepth float64 `yaml:"position_depth,omitempty"`
 }
 

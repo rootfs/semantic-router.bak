@@ -1,0 +1,100 @@
+# Compression Rules — Configurable patterns for NLP prompt compression.
+#
+# These rules drive the interrogative and specificity scoring signals
+# used by the prompt compression pipeline. All patterns are matched at
+# runtime — adding a new language requires only editing this file.
+#
+# Reference: Biased TextRank (Kazemi et al., COLING 2020) for query-focused
+# extraction; LongLLMLingua (Jiang et al., ACL 2024) for query-aware compression.
+
+interrogative:
+  # Question-mark runes. Checked against the final non-whitespace rune
+  # of each sentence. This is the most reliable cross-lingual signal.
+  question_marks:
+    - "?"
+    - "\uFF1F"  # ？ CJK fullwidth
+    - "\u061F"  # ؟  Arabic
+    - "\u037E"  # ;  Greek question mark
+    - "\u2E2E"  # ⸮ reversed question mark (irony/rhetorical)
+
+  # Per-language interrogative words. Matched case-insensitively against
+  # the first whitespace-delimited token(s) of a sentence.
+  wh_words:
+    en: [who, what, where, when, why, how, which, whose, whom]
+    zh: ["谁", "什么", "哪里", "哪", "什么时候", "为什么", "怎么", "怎样", "多少"]
+    ja: ["誰", "何", "どこ", "いつ", "なぜ", "どう", "どの", "どれ", "いくつ"]
+    ko: ["누구", "무엇", "어디", "언제", "왜", "어떻게", "어느", "몇"]
+    ar: ["من", "ماذا", "ما", "أين", "متى", "لماذا", "كيف", "أي", "كم"]
+    hi: ["कौन", "क्या", "कहाँ", "कब", "क्यों", "कैसे", "कितना", "किसका"]
+    es: ["quién", "qué", "dónde", "cuándo", "cómo", "cuál", "cuánto"]
+    fr: ["qui", "que", "où", "quand", "pourquoi", "comment", "quel", "combien"]
+    de: ["wer", "was", "wo", "wann", "warum", "wie", "welch", "wieviel"]
+    pt: ["quem", "que", "onde", "quando", "como", "qual", "quanto"]
+    ru: ["кто", "что", "где", "когда", "почему", "как", "какой", "сколько"]
+    tr: ["kim", "ne", "nerede", "ne zaman", "neden", "nasıl", "hangi", "kaç"]
+
+  # Sentence-final question particles. Matched against the last token
+  # of a sentence (before punctuation). Common in East Asian languages
+  # where questions may lack a question mark.
+  question_particles:
+    ja: ["か", "かな", "かしら", "の", "でしょうか", "ですか", "ますか"]
+    ko: ["까", "가요", "나요", "는지", "을까", "ㄹ까", "니"]
+    zh: ["吗", "呢", "吧", "么", "嗎"]
+
+  # Request/imperative patterns. Matched case-insensitively against the
+  # start of a sentence. These indicate the user is asking for information.
+  request_patterns:
+    en:
+      - "tell me"
+      - "remind me"
+      - "do you remember"
+      - "do you know"
+      - "can you"
+      - "could you"
+      - "would you"
+      - "please tell"
+      - "please remind"
+      - "i need to know"
+      - "i want to know"
+      - "let me know"
+    zh: ["告诉我", "提醒我", "你记得", "你知道", "请告诉", "我想知道"]
+    ja: ["教えて", "思い出して", "覚えて", "知って"]
+    ko: ["알려줘", "기억나", "말해줘", "알고 싶"]
+    es: ["dime", "recuérdame", "sabes", "puedes"]
+    fr: ["dis-moi", "rappelle-moi", "sais-tu", "peux-tu"]
+    de: ["sag mir", "erinnerst du", "weißt du", "kannst du"]
+
+  # Indirect question markers. Matched anywhere in the sentence
+  # (case-insensitive substring). Weakest signal.
+  indirect_markers:
+    en: ["wondering", "curious", "want to know", "like to know",
+         "interested in knowing", "trying to remember", "trying to recall"]
+    zh: ["想知道", "好奇", "想了解"]
+    ja: ["知りたい", "気になる"]
+    ko: ["궁금", "알고 싶"]
+
+  # Score tiers — the maximum matching tier determines the sentence's
+  # interrogative score. Not additive.
+  scores:
+    question_mark: 1.0
+    wh_with_qmark: 1.0
+    wh_without_qmark: 0.7
+    particle: 0.8
+    request_pattern: 0.7
+    indirect_marker: 0.3
+
+specificity:
+  # Sub-signal weights for specificity scoring.
+  # Score = sum(weight_i * count_i) / total_tokens, normalized to [0,1].
+  weights:
+    proper_noun: 1.0       # Capitalized tokens not at sentence start (Latin-script)
+    numeric: 0.8           # Tokens containing digits (dates, quantities — universal)
+    quoted: 0.6            # Content inside quotes ("...", '...', 「...」)
+    long_unique: 0.4       # Long tokens with low document frequency
+
+  # A token must be at least this many characters to qualify as "long".
+  long_token_min_chars: 8
+
+  # A token's document-frequency ratio must be below this to qualify
+  # as "unique" (df / num_sentences). Lower = rarer = more specific.
+  long_token_max_df_ratio: 0.3
