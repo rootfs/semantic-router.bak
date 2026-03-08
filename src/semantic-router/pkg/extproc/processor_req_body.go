@@ -993,6 +993,9 @@ func (r *OpenAIRouter) handleMemoryRetrieval(
 	if memoryPluginConfig != nil && memoryPluginConfig.HybridSearch {
 		retrieveOpts.HybridSearch = true
 		retrieveOpts.HybridMode = memoryPluginConfig.HybridMode
+	} else if r.Config.Memory.HybridSearch {
+		retrieveOpts.HybridSearch = true
+		retrieveOpts.HybridMode = r.Config.Memory.HybridMode
 	}
 
 	retrieveOpts.AdaptiveThreshold = r.Config.Memory.AdaptiveThreshold

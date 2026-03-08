@@ -1131,6 +1131,13 @@ type MemoryConfig struct {
 	// Default: 0.6
 	DefaultSimilarityThreshold float32 `yaml:"default_similarity_threshold,omitempty"`
 
+	// HybridSearch enables BM25 + n-gram re-ranking on top of vector search globally.
+	// Per-decision MemoryPluginConfig.HybridSearch takes precedence when set.
+	HybridSearch bool `yaml:"hybrid_search,omitempty"`
+
+	// HybridMode selects the score fusion method: "weighted" (default) or "rrf".
+	HybridMode string `yaml:"hybrid_mode,omitempty"`
+
 	// AdaptiveThreshold enables elbow-based adaptive thresholding.
 	// When enabled, the retriever finds the largest score gap between
 	// consecutive candidates and discards everything below the gap,
