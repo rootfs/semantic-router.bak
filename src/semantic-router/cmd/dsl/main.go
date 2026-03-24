@@ -15,6 +15,7 @@ Commands:
   decompile  Convert YAML config to routing-only DSL
   validate   Validate a DSL file
   fmt        Format a DSL file
+  doctor     Diagnose DSL configuration issues (signal disconnection, composition pathology, etc.)
 
 Examples:
   sr-dsl compile -o config.yaml --base providers.yaml privacy-router.dsl
@@ -23,6 +24,8 @@ Examples:
   sr-dsl decompile -o config.dsl config.yaml
   sr-dsl validate config.dsl
   sr-dsl fmt -o formatted.dsl config.dsl
+  sr-dsl doctor config.dsl
+  sr-dsl doctor --json config.dsl
 `
 
 func main() {
@@ -43,6 +46,8 @@ func main() {
 		runValidate()
 	case "fmt", "format":
 		runFormat()
+	case "doctor":
+		runDoctor()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -115,6 +120,28 @@ func runValidate() {
 
 	inputPath := fs.Arg(0)
 	errCount := dsl.CLIValidateWithRunner(inputPath, os.Stdout, buildNativeTestBlockRunner)
+	if errCount > 0 {
+		os.Exit(1)
+	}
+}
+
+func runDoctor() {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	jsonOutput := fs.Bool("json", false, "Output structured JSON instead of human-readable report")
+
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+
+	if fs.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "Error: input file required")
+		fmt.Fprintln(os.Stderr, "Usage: sr-dsl doctor [--json] <input.dsl>")
+		os.Exit(1)
+	}
+
+	inputPath := fs.Arg(0)
+	errCount := dsl.CLIDoctor(inputPath, os.Stdout, *jsonOutput)
 	if errCount > 0 {
 		os.Exit(1)
 	}

@@ -70,10 +70,11 @@ type DecisionResult struct {
 
 // EvalDecisionResult represents the decision result for eval scenarios (without confidence)
 type EvalDecisionResult struct {
-	DecisionName     string          `json:"decision_name"`
-	UsedSignals      *MatchedSignals `json:"used_signals"`      // Signals used by this decision (from decision rules)
-	MatchedSignals   *MatchedSignals `json:"matched_signals"`   // Signals that matched
-	UnmatchedSignals *MatchedSignals `json:"unmatched_signals"` // Signals that didn't match
+	DecisionName     string                  `json:"decision_name"`
+	UsedSignals      *MatchedSignals         `json:"used_signals"`                // Signals used by this decision (from decision rules)
+	MatchedSignals   *MatchedSignals         `json:"matched_signals"`             // Signals that matched
+	UnmatchedSignals *MatchedSignals         `json:"unmatched_signals"`           // Signals that didn't match
+	EvalTrace        []decision.DecisionTrace `json:"eval_trace,omitempty"`       // Full evaluation traces per decision (only when ?trace=true)
 }
 
 // EvalResponse represents the eval classification response with comprehensive signal information.
@@ -162,6 +163,43 @@ func (s *ClassificationService) ClassifyIntentForEval(req IntentRequest) (*EvalR
 	}
 
 	return s.buildEvalResponse(req.Text, signals, decisionResult), nil
+}
+
+// ClassifyIntentForEvalWithTrace performs eval classification with optional trace.
+// When trace is true, full decision evaluation traces are included in the response.
+func (s *ClassificationService) ClassifyIntentForEvalWithTrace(req IntentRequest, trace bool) (*EvalResponse, error) {
+	if !trace {
+		return s.ClassifyIntentForEval(req)
+	}
+
+	if req.Text == "" {
+		return nil, fmt.Errorf("text cannot be empty")
+	}
+
+	if s.classifier == nil {
+		return &EvalResponse{
+			OriginalText: req.Text,
+			Metrics:      &classification.SignalMetricsCollection{},
+		}, nil
+	}
+
+	signals := s.classifier.EvaluateAllSignalsWithForceOption(req.Text, true)
+
+	var decisionResult *decision.DecisionResult
+	var traces []decision.DecisionTrace
+	if s.config != nil && len(s.config.Decisions) > 0 {
+		var err error
+		decisionResult, traces, err = s.classifier.EvaluateDecisionWithEngineTrace(signals)
+		if err != nil && !strings.Contains(err.Error(), "no decisions configured") {
+			logging.Warnf("Decision evaluation failed: %v", err)
+		}
+	}
+
+	response := s.buildEvalResponse(req.Text, signals, decisionResult)
+	if response.DecisionResult != nil {
+		response.DecisionResult.EvalTrace = traces
+	}
+	return response, nil
 }
 
 func buildMatchedSignals(signals *classification.SignalResults) *MatchedSignals {

@@ -48,8 +48,10 @@ func (s *ClassificationAPIServer) handleEvalClassification(w http.ResponseWriter
 	}
 	req.Options.EvaluateAllSignals = true
 
+	traceEnabled := r.URL.Query().Get("trace") == "true"
+
 	// Use signal-driven classification with all signals evaluated
-	response, err := s.classificationSvc.ClassifyIntentForEval(req)
+	response, err := s.classificationSvc.ClassifyIntentForEvalWithTrace(req, traceEnabled)
 	if err != nil {
 		s.writeErrorResponse(w, http.StatusInternalServerError, "CLASSIFICATION_ERROR", err.Error())
 		return

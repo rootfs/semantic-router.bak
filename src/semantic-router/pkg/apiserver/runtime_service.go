@@ -10,6 +10,7 @@ import (
 type intentClassificationService interface {
 	ClassifyIntent(req services.IntentRequest) (*services.IntentResponse, error)
 	ClassifyIntentForEval(req services.IntentRequest) (*services.EvalResponse, error)
+	ClassifyIntentForEvalWithTrace(req services.IntentRequest, trace bool) (*services.EvalResponse, error)
 	DetectPII(req services.PIIRequest) (*services.PIIResponse, error)
 	CheckSecurity(req services.SecurityRequest) (*services.SecurityResponse, error)
 }
@@ -78,6 +79,10 @@ func (s *liveClassificationService) ClassifyIntent(req services.IntentRequest) (
 
 func (s *liveClassificationService) ClassifyIntentForEval(req services.IntentRequest) (*services.EvalResponse, error) {
 	return s.current().ClassifyIntentForEval(req)
+}
+
+func (s *liveClassificationService) ClassifyIntentForEvalWithTrace(req services.IntentRequest, trace bool) (*services.EvalResponse, error) {
+	return s.current().ClassifyIntentForEvalWithTrace(req, trace)
 }
 
 func (s *liveClassificationService) DetectPII(req services.PIIRequest) (*services.PIIResponse, error) {

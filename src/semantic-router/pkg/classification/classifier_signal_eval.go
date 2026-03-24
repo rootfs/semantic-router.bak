@@ -330,3 +330,47 @@ func (c *Classifier) EvaluateDecisionWithEngine(signals *SignalResults) (*decisi
 
 	return result, nil
 }
+
+// EvaluateDecisionWithEngineTrace performs decision evaluation with full trace
+// information for every decision's rule tree.
+func (c *Classifier) EvaluateDecisionWithEngineTrace(
+	signals *SignalResults,
+) (*decision.DecisionResult, []decision.DecisionTrace, error) {
+	if len(c.Config.Decisions) == 0 {
+		return nil, nil, fmt.Errorf("no decisions configured")
+	}
+
+	engine := decision.NewDecisionEngine(
+		c.Config.KeywordRules,
+		c.Config.EmbeddingRules,
+		c.Config.Categories,
+		c.Config.Decisions,
+		c.Config.Strategy,
+	)
+
+	signalMatches := &decision.SignalMatches{
+		KeywordRules:      signals.MatchedKeywordRules,
+		EmbeddingRules:    signals.MatchedEmbeddingRules,
+		DomainRules:       signals.MatchedDomainRules,
+		FactCheckRules:    signals.MatchedFactCheckRules,
+		UserFeedbackRules: signals.MatchedUserFeedbackRules,
+		PreferenceRules:   signals.MatchedPreferenceRules,
+		LanguageRules:     signals.MatchedLanguageRules,
+		ContextRules:      signals.MatchedContextRules,
+		StructureRules:    signals.MatchedStructureRules,
+		ComplexityRules:   signals.MatchedComplexityRules,
+		ModalityRules:     signals.MatchedModalityRules,
+		SignalConfidences: signals.SignalConfidences,
+		AuthzRules:        signals.MatchedAuthzRules,
+		JailbreakRules:    signals.MatchedJailbreakRules,
+		PIIRules:          signals.MatchedPIIRules,
+		CategoryKBRules:   signals.MatchedCategoryKBRules,
+		ProjectionRules:   signals.MatchedProjectionRules,
+	}
+
+	result, traces := engine.EvaluateDecisionsWithTrace(signalMatches)
+	if result != nil {
+		result.MatchedKeywords = signals.MatchedKeywords
+	}
+	return result, traces, nil
+}

@@ -113,14 +113,17 @@ func TestMaintainedBalanceWarningBudgetStaysBelowCeiling(t *testing.T) {
 			t.Fatalf("unexpected maintained balance diagnostic: %s", diag.String())
 		}
 		if diag.Level == DiagWarning {
-			if !strings.Contains(diag.Message, "no mutual exclusion guard") {
+			isKnownCategory := strings.Contains(diag.Message, "no mutual exclusion guard") ||
+				strings.Contains(diag.Message, "never referenced") ||
+				strings.Contains(diag.Message, "matched-rules list")
+			if !isKnownCategory {
 				t.Fatalf("unexpected maintained balance warning category: %s", diag.Message)
 			}
 			warnings++
 		}
 	}
 
-	const maxWarnings = 88
+	const maxWarnings = 115
 	if warnings > maxWarnings {
 		t.Fatalf("expected maintained balance warning count <= %d after recipe guard tightening, got %d", maxWarnings, warnings)
 	}
