@@ -52,6 +52,7 @@ func (c *Classifier) signalReadiness() map[string]bool {
 		config.SignalTypeModality:     len(c.Config.ModalityRules) > 0 && c.Config.ModalityDetector.Enabled,
 		config.SignalTypeJailbreak:    len(c.Config.JailbreakRules) > 0 && c.IsJailbreakEnabled(),
 		config.SignalTypePII:          len(c.Config.PIIRules) > 0 && c.IsPIIEnabled(),
+		config.SignalTypeCategoryKB:   c.categoryKBClassifier != nil,
 	}
 }
 
@@ -716,4 +717,58 @@ func (c *Classifier) evaluatePIIRule(rule config.PIIRule, piiText string, nonUse
 		}
 		mu.Unlock()
 	}
+}
+
+// evaluateCategoryKBSignal runs per-category knowledge base classification and
+// populates matched category rules, confidences, and the contrastive score.
+func (c *Classifier) evaluateCategoryKBSignal(results *SignalResults, mu *sync.Mutex, text string) {
+	if c.categoryKBClassifier == nil {
+		return
+	}
+
+	start := time.Now()
+	classifyResult, err := c.categoryKBClassifier.Classify(text)
+	if err != nil {
+		logging.Warnf("[CategoryKB Signal] Classification failed: %v", err)
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	results.MatchedCategoryKBRules = classifyResult.MatchedRules
+	results.CategoryKBBestCategory = classifyResult.BestCategory
+	results.CategoryKBBestSim = classifyResult.BestSimilarity
+	results.CategoryKBContrastive = classifyResult.ContrastiveScore
+
+	// Add best-category and best-tier synthetic entries so WHEN clauses can
+	// match on the dominant classification rather than any-above-threshold.
+	if classifyResult.BestCategory != "" {
+		results.MatchedCategoryKBRules = append(results.MatchedCategoryKBRules,
+			"__best__:"+classifyResult.BestCategory)
+	}
+	if classifyResult.BestTier != "" {
+		results.MatchedCategoryKBRules = append(results.MatchedCategoryKBRules,
+			"__tier__:"+classifyResult.BestTier)
+	}
+	// Also add __contrastive__ so projection match gates pass.
+	if classifyResult.ContrastiveScore != 0 {
+		results.MatchedCategoryKBRules = append(results.MatchedCategoryKBRules, "__contrastive__")
+	}
+
+	for cat, conf := range classifyResult.Confidences {
+		key := config.SignalTypeCategoryKB + ":" + cat
+		results.SignalConfidences[key] = conf
+	}
+
+	results.SignalConfidences[config.SignalTypeCategoryKB+":__contrastive__"] = classifyResult.ContrastiveScore
+
+	for _, cat := range classifyResult.MatchedRules {
+		metrics.RecordSignalMatch(config.SignalTypeCategoryKB, cat)
+	}
+	metrics.RecordSignalExtraction(config.SignalTypeCategoryKB, c.categoryKBClassifier.rule.Name, time.Since(start).Seconds())
+
+	logging.Debugf("[CategoryKB Signal] best=%s (%.3f), contrastive=%.3f, matched=%v",
+		classifyResult.BestCategory, classifyResult.BestSimilarity,
+		classifyResult.ContrastiveScore, classifyResult.MatchedRules)
 }
