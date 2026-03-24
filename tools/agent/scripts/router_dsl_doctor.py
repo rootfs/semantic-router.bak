@@ -405,8 +405,176 @@ def _generate_recommendations(
 
 
 # ---------------------------------------------------------------------------
-# Fix application (stub for --dry-run)
+# Fix application
 # ---------------------------------------------------------------------------
+
+import re
+
+
+def _infer_tier_from_route(route_name: str) -> str:
+    """Infer the tier name from a route name.
+
+    Examples:
+      local_security_containment → security_containment
+      local_privacy_policy       → privacy_policy
+      cloud_frontier_reasoning   → frontier_reasoning
+      local_standard             → local_standard
+    """
+    prefixes = ("local_", "cloud_", "onprem_", "edge_")
+    for p in prefixes:
+        if route_name.startswith(p):
+            candidate = route_name[len(p):]
+            if candidate and candidate != "standard":
+                return candidate
+    return route_name
+
+
+def _parse_route_blocks(dsl_text: str) -> list[dict[str, Any]]:
+    """Parse DSL text into a list of route block descriptions.
+
+    Each entry contains:
+      name, start_line, end_line, when_start, when_end, when_text,
+      priority, raw_lines
+    """
+    lines = dsl_text.splitlines(keepends=True)
+    routes: list[dict[str, Any]] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        m = re.match(r'^ROUTE\s+(\S+)', stripped)
+        if m:
+            route_name = m.group(1)
+            block_start = i
+            brace_depth = 0
+            block_end = i
+            for j in range(i, len(lines)):
+                brace_depth += lines[j].count('{') - lines[j].count('}')
+                if brace_depth <= 0 and j > i:
+                    block_end = j
+                    break
+            else:
+                block_end = len(lines) - 1
+
+            block_lines = lines[block_start:block_end + 1]
+            block_text = "".join(block_lines)
+
+            when_start = when_end = -1
+            for k, bl in enumerate(block_lines):
+                if bl.strip().startswith("WHEN ") or bl.strip() == "WHEN":
+                    when_start = k
+                    break
+
+            if when_start >= 0:
+                when_end = when_start
+                for k in range(when_start + 1, len(block_lines)):
+                    kl = block_lines[k].strip()
+                    if kl.startswith(("MODEL ", "PLUGIN ", "TIER ", "TOOL_SCOPE ")):
+                        break
+                    if kl == "}" or kl.startswith("}"):
+                        break
+                    when_end = k
+
+            when_text = "".join(block_lines[when_start:when_end + 1]) if when_start >= 0 else ""
+
+            priority = 100
+            pm = re.search(r'PRIORITY\s+(\d+)', block_text)
+            if pm:
+                priority = int(pm.group(1))
+
+            routes.append({
+                "name": route_name,
+                "block_start": block_start,
+                "block_end": block_end,
+                "when_start": block_start + when_start if when_start >= 0 else -1,
+                "when_end": block_start + when_end if when_end >= 0 else -1,
+                "when_text": when_text,
+                "priority": priority,
+                "raw_lines": block_lines,
+            })
+
+            i = block_end + 1
+            continue
+        i += 1
+
+    return routes
+
+
+def _extract_when_signals(when_text: str) -> dict[str, list[str]]:
+    """Extract signal references from a WHEN clause.
+
+    Returns {signal_type: [signal_names]}.
+    """
+    signals: dict[str, list[str]] = defaultdict(list)
+    for m in re.finditer(r'(category_kb|projection|keyword|embedding|jailbreak|pii)\("([^"]+)"\)', when_text):
+        signals[m.group(1)].append(m.group(2))
+    return dict(signals)
+
+
+def _classify_route_issues(
+    route: dict[str, Any], all_diag_messages: list[str]
+) -> list[str]:
+    """Classify what's wrong with a route based on Doctor diagnostics."""
+    issues = []
+    rname = route["name"]
+    signals = _extract_when_signals(route["when_text"])
+
+    ckb_names = signals.get("category_kb", [])
+    proj_names = signals.get("projection", [])
+
+    raw_ckb = [n for n in ckb_names if not n.startswith("__")]
+    tier_ckb = [n for n in ckb_names if n.startswith("__tier__:")]
+
+    if len(raw_ckb) >= 3:
+        issues.append("binary_catchall")
+    if tier_ckb and proj_names:
+        for tier in tier_ckb:
+            for proj in proj_names:
+                for msg in all_diag_messages:
+                    if rname in msg and "dominat" in msg.lower():
+                        issues.append("composition_dominance")
+                        break
+    if not ckb_names and proj_names and route["priority"] <= 200:
+        issues.append("missing_tier")
+
+    return list(set(issues))
+
+
+def _rewrite_when_clause(
+    route: dict[str, Any],
+    issues: list[str],
+    keep_projection_fallback: bool = False,
+) -> str:
+    """Rewrite a route's WHEN clause to fix identified issues."""
+    signals = _extract_when_signals(route["when_text"])
+    proj_names = signals.get("projection", [])
+    tier_name = _infer_tier_from_route(route["name"])
+
+    if "binary_catchall" in issues:
+        new_when = f'  WHEN category_kb("__tier__:{tier_name}")'
+        if keep_projection_fallback and proj_names:
+            new_when += f' OR projection("{proj_names[0]}")'
+        return new_when + "\n"
+
+    if "composition_dominance" in issues:
+        tier_ckb = [n for n in signals.get("category_kb", []) if n.startswith("__tier__:")]
+        if tier_ckb:
+            new_when = f'  WHEN category_kb("{tier_ckb[0]}")'
+            if keep_projection_fallback and proj_names:
+                new_when += f' OR projection("{proj_names[0]}")'
+            return new_when + "\n"
+
+    if "missing_tier" in issues:
+        orig = route["when_text"].strip()
+        orig_when_body = orig
+        if orig_when_body.startswith("WHEN "):
+            orig_when_body = orig_when_body[5:]
+        new_when = f'  WHEN category_kb("__tier__:{tier_name}")'
+        if proj_names:
+            new_when += f" OR ({orig_when_body.strip()})"
+        return new_when + "\n"
+
+    return route["when_text"]
+
 
 def apply_fixes(
     dsl_path: str,
@@ -414,31 +582,61 @@ def apply_fixes(
     probe_results: list[dict[str, Any]],
     dry_run: bool = True,
 ) -> list[dict[str, Any]]:
-    """Apply suggested fixes from diagnostics.
+    """Apply automated fixes from diagnostics.
 
-    Returns a list of applied/proposed fixes.
-    Currently extracts QuickFix suggestions from static diagnostics.
+    Returns a list of applied/proposed fixes with before/after snippets.
     """
-    fixes: list[dict[str, Any]] = []
+    dsl_text = Path(dsl_path).read_text(encoding="utf-8")
+    lines = dsl_text.splitlines(keepends=True)
+    routes = _parse_route_blocks(dsl_text)
+    diag_messages = [d.get("message", "") for d in static_diags]
 
-    for d in static_diags:
-        msg = d.get("message", "")
-        # Extract [Fix: ...] suggestions from diagnostic messages
-        if "[Fix:" in msg:
-            fix_start = msg.index("[Fix:") + 5
-            fix_end = msg.index("]", fix_start)
-            fix_desc = msg[fix_start:fix_end].strip()
+    fixes: list[dict[str, Any]] = []
+    line_replacements: dict[int, tuple[int, str]] = {}
+
+    for route in routes:
+        if route["when_start"] < 0:
+            continue
+        issues = _classify_route_issues(route, diag_messages)
+        if not issues:
+            continue
+
+        keep_fallback = route["priority"] >= 300 or route["name"].endswith("_standard") or route["name"].endswith("_containment")
+
+        new_when = _rewrite_when_clause(route, issues, keep_projection_fallback=keep_fallback)
+        old_when = route["when_text"]
+
+        if new_when.strip() != old_when.strip():
             fixes.append({
-                "source": "static_analysis",
-                "description": fix_desc,
+                "route": route["name"],
+                "issues": issues,
+                "old_when": old_when.strip(),
+                "new_when": new_when.strip(),
                 "applied": not dry_run,
             })
+            line_replacements[route["when_start"]] = (route["when_end"], new_when)
 
-    if dry_run:
+    if dry_run or not line_replacements:
         return fixes
 
-    # For non-dry-run, write modified DSL
-    # (Full implementation would parse DSL AST and apply transformations)
+    new_lines: list[str] = []
+    skip_until = -1
+    for i, line in enumerate(lines):
+        if i <= skip_until:
+            continue
+        if i in line_replacements:
+            end_line, replacement = line_replacements[i]
+            new_lines.append(replacement)
+            skip_until = end_line
+        else:
+            new_lines.append(line)
+
+    fixed_text = "".join(new_lines)
+    Path(dsl_path).write_text(fixed_text, encoding="utf-8")
+
+    for fix in fixes:
+        fix["applied"] = True
+
     return fixes
 
 
