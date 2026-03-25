@@ -52,6 +52,7 @@ func (c *Classifier) getAllSignalTypes() map[string]bool {
 	collectSignalKeys(allSignals, config.SignalTypeAuthz, c.Config.GetRoleBindings(), func(rb config.RoleBinding) string { return rb.Role })
 	collectSignalKeys(allSignals, config.SignalTypeJailbreak, c.Config.JailbreakRules, func(r config.JailbreakRule) string { return r.Name })
 	collectSignalKeys(allSignals, config.SignalTypePII, c.Config.PIIRules, func(r config.PIIRule) string { return r.Name })
+	collectSignalKeys(allSignals, config.SignalTypeCategoryKB, c.Config.CategoryKBRules, func(r config.CategoryKBRule) string { return r.Name })
 	for _, mapping := range c.Config.Projections.Mappings {
 		for _, output := range mapping.Outputs {
 			allSignals[strings.ToLower(config.SignalTypeProjection+":"+output.Name)] = true
@@ -85,6 +86,10 @@ type SignalResults struct {
 	MatchedAuthzRules        []string // Matched authz role names for user-level RBAC routing
 	MatchedJailbreakRules    []string // Matched jailbreak rule names (confidence >= threshold)
 	MatchedPIIRules          []string // Matched PII rule names (denied PII types detected)
+	MatchedCategoryKBRules   []string // Matched category KB rule names (category names exceeding threshold)
+	CategoryKBBestCategory   string   // Best-matching category from KB classification
+	CategoryKBBestSim        float64  // Similarity score of the best category
+	CategoryKBContrastive    float64  // Contrastive score: max(private) - max(public)
 	MatchedProjectionRules   []string // Matched derived routing outputs from routing.projections.mappings
 	ProjectionScores         map[string]float64
 
@@ -307,6 +312,7 @@ func (c *Classifier) EvaluateDecisionWithEngine(signals *SignalResults) (*decisi
 		AuthzRules:        signals.MatchedAuthzRules,
 		JailbreakRules:    signals.MatchedJailbreakRules,
 		PIIRules:          signals.MatchedPIIRules,
+		CategoryKBRules:   signals.MatchedCategoryKBRules,
 		ProjectionRules:   signals.MatchedProjectionRules,
 	})
 	if err != nil {
@@ -323,4 +329,48 @@ func (c *Classifier) EvaluateDecisionWithEngine(signals *SignalResults) (*decisi
 		result.Decision.Name, result.Confidence, result.MatchedRules, result.MatchedKeywords)
 
 	return result, nil
+}
+
+// EvaluateDecisionWithEngineTrace performs decision evaluation with full trace
+// information for every decision's rule tree.
+func (c *Classifier) EvaluateDecisionWithEngineTrace(
+	signals *SignalResults,
+) (*decision.DecisionResult, []decision.DecisionTrace, error) {
+	if len(c.Config.Decisions) == 0 {
+		return nil, nil, fmt.Errorf("no decisions configured")
+	}
+
+	engine := decision.NewDecisionEngine(
+		c.Config.KeywordRules,
+		c.Config.EmbeddingRules,
+		c.Config.Categories,
+		c.Config.Decisions,
+		c.Config.Strategy,
+	)
+
+	signalMatches := &decision.SignalMatches{
+		KeywordRules:      signals.MatchedKeywordRules,
+		EmbeddingRules:    signals.MatchedEmbeddingRules,
+		DomainRules:       signals.MatchedDomainRules,
+		FactCheckRules:    signals.MatchedFactCheckRules,
+		UserFeedbackRules: signals.MatchedUserFeedbackRules,
+		PreferenceRules:   signals.MatchedPreferenceRules,
+		LanguageRules:     signals.MatchedLanguageRules,
+		ContextRules:      signals.MatchedContextRules,
+		StructureRules:    signals.MatchedStructureRules,
+		ComplexityRules:   signals.MatchedComplexityRules,
+		ModalityRules:     signals.MatchedModalityRules,
+		SignalConfidences: signals.SignalConfidences,
+		AuthzRules:        signals.MatchedAuthzRules,
+		JailbreakRules:    signals.MatchedJailbreakRules,
+		PIIRules:          signals.MatchedPIIRules,
+		CategoryKBRules:   signals.MatchedCategoryKBRules,
+		ProjectionRules:   signals.MatchedProjectionRules,
+	}
+
+	result, traces := engine.EvaluateDecisionsWithTrace(signalMatches)
+	if result != nil {
+		result.MatchedKeywords = signals.MatchedKeywords
+	}
+	return result, traces, nil
 }

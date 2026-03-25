@@ -17,6 +17,10 @@ func (v *Validator) checkConflicts() {
 	v.checkProjections()
 	v.checkTestBlocks()
 	v.checkTierConstraints()
+	v.checkUnusedSignals()
+	v.checkMatchGateConsistency()
+	v.checkORCompositionRisks()
+	v.checkCategoryKBBinaryVsBestMatch()
 }
 
 // checkDomainSignalOverlap detects MMLU category strings shared by two or more
