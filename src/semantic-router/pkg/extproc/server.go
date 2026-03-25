@@ -130,19 +130,31 @@ func (s *Server) Start() error {
 	defer cancel()
 	go s.watchConfigAndReload(ctx)
 
-	// Wait for interrupt signal to gracefully shut down the server
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Wait for either server error or shutdown signal
-	select {
-	case err := <-serverErrCh:
-		if err != nil {
-			logging.Errorf("Server exited with error: %v", err)
-			return err
+	for {
+		select {
+		case err := <-serverErrCh:
+			if err != nil {
+				logging.Errorf("Server exited with error: %v", err)
+				return err
+			}
+			return nil
+		case sig := <-signalChan:
+			if sig == syscall.SIGHUP {
+				logging.Infof("Received SIGHUP, reloading config from %s", s.configPath)
+				if err := s.reloadRouterFromFile(s.configPath); err != nil {
+					logging.Errorf("SIGHUP reload failed: %v", err)
+				} else {
+					logging.Infof("SIGHUP reload completed successfully")
+				}
+				continue
+			}
+			logging.Infof("Received shutdown signal, gracefully stopping server...")
 		}
-	case <-signalChan:
-		logging.Infof("Received shutdown signal, gracefully stopping server...")
+		break
 	}
 
 	s.Stop()

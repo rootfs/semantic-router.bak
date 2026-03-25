@@ -224,6 +224,7 @@ func (s *ClassificationAPIServer) registerConfigRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /config/deploy", s.handleConfigDeploy)
 	mux.HandleFunc("POST /config/rollback", s.handleConfigRollback)
 	mux.HandleFunc("GET /config/versions", s.handleConfigVersions)
+	mux.HandleFunc("GET /config/hash", s.handleConfigHash)
 	s.registerOptionalSystemPromptRoutes(mux)
 }
 
