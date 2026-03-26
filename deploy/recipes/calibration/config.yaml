@@ -1,0 +1,106 @@
+version: v0.3
+listeners:
+- address: 0.0.0.0
+  name: http-8899
+  port: 8899
+  timeout: 1200s
+providers:
+  defaults:
+    default_model: local/small-7b
+    default_reasoning_effort: medium
+  models:
+  - name: local/small-7b
+    api_format: openai
+    provider_model_id: qwen/qwen3.5-rocm
+    backend_refs:
+    - name: local-vllm
+      endpoint: localhost:8000
+      protocol: http
+      type: vllm
+      weight: 1
+    pricing:
+      prompt_per_1m: 0.04
+      completion_per_1m: 0.1
+      currency: USD
+  - name: cloud/frontier-72b
+    api_format: openai
+    provider_model_id: anthropic/claude-opus-4.6
+    backend_refs:
+    - name: vllm_primary
+      endpoint: localhost:8000
+      protocol: http
+      weight: 1
+    pricing:
+      prompt_per_1m: 0.12
+      completion_per_1m: 0.39
+      currency: USD
+routing:
+  decisions:
+  - name: escalate_72b
+    priority: 200
+    tier: 1
+    modelRefs:
+    - model: cloud/frontier-72b
+      use_reasoning: null
+    rules:
+      operator: OR
+      conditions:
+      - type: category_kb
+        name: __best__:biology
+      - type: category_kb
+        name: __best__:business
+      - type: category_kb
+        name: __best__:computer_science
+      - type: category_kb
+        name: __best__:economics
+      - type: category_kb
+        name: __best__:history
+      - type: category_kb
+        name: __best__:math
+      - type: category_kb
+        name: __best__:other
+      - type: category_kb
+        name: __best__:philosophy
+      - type: category_kb
+        name: __best__:psychology
+  - name: keep_7b
+    priority: 100
+    tier: 2
+    modelRefs:
+    - model: local/small-7b
+      use_reasoning: null
+    rules:
+      operator: AND
+      conditions:
+      - type: projection
+        name: no_escalation
+  modelCards:
+  - name: local/small-7b
+    context_window_size: 131072
+  - name: cloud/frontier-72b
+    context_window_size: 262144
+  projections:
+    scores:
+    - name: escalation_pressure
+      method: weighted_sum
+      inputs:
+      - type: category_kb
+        name: __contrastive__
+        value_source: confidence
+        weight: 1.0
+    mappings:
+    - name: escalation_band
+      source: escalation_pressure
+      method: threshold_bands
+      outputs:
+      - name: no_escalation
+        lt: 2.0
+      - name: escalation_signal
+        gte: 2.0
+  signals:
+    category_kb:
+    - name: mmlu_classifier
+      kb_dir: /data/semantic-router.bak/deploy/recipes/calibration/knowledge_bases/
+      taxonomy_path: /data/semantic-router.bak/deploy/recipes/calibration/knowledge_bases/taxonomy.json
+      threshold: 0.25
+      security_threshold: 0.2
