@@ -1,284 +1,106 @@
 version: v0.3
 listeners:
-  - address: 0.0.0.0
-    name: http-8899
-    port: 8899
-    timeout: 1200s
+- address: 0.0.0.0
+  name: http-8899
+  port: 8899
+  timeout: 1200s
 providers:
   defaults:
-    default_model: local/private-qwen
+    default_model: local/small-7b
     default_reasoning_effort: medium
-    reasoning_families:
-      qwen3:
-        parameter: enable_thinking
-        type: chat_template_kwargs
   models:
-    - api_format: openai
-      backend_refs:
-        - endpoint: localhost:8000
-          name: local-vllm
-          protocol: http
-          type: vllm
-          weight: 1
-      name: local/private-qwen
-      pricing:
-        completion_per_1m: 0
-        currency: USD
-        prompt_per_1m: 0
-      provider_model_id: qwen/qwen3.5-rocm
-      reasoning_family: qwen3
-    - api_format: openai
-      backend_refs:
-        - endpoint: localhost:8000
-          name: vllm_primary
-          protocol: http
-          weight: 1
-      name: cloud/frontier-reasoning
-      pricing:
-        completion_per_1m: 7.2
-        currency: USD
-        prompt_per_1m: 1.8
-      provider_model_id: anthropic/claude-opus-4.6
-      reasoning_family: qwen3
+  - name: local/small-7b
+    api_format: openai
+    provider_model_id: qwen/qwen3.5-rocm
+    backend_refs:
+    - name: local-vllm
+      endpoint: localhost:8000
+      protocol: http
+      type: vllm
+      weight: 1
+    pricing:
+      prompt_per_1m: 0.04
+      completion_per_1m: 0.1
+      currency: USD
+  - name: cloud/frontier-72b
+    api_format: openai
+    provider_model_id: anthropic/claude-opus-4.6
+    backend_refs:
+    - name: vllm_primary
+      endpoint: localhost:8000
+      protocol: http
+      weight: 1
+    pricing:
+      prompt_per_1m: 0.12
+      completion_per_1m: 0.39
+      currency: USD
 routing:
   decisions:
-    - modelRefs:
-        - model: local/private-qwen
-          use_reasoning: null
-      name: local_security_containment
-      priority: 300
-      rules:
-        conditions:
-          - name: policy_security_local_only
-            type: projection
-          - name: prompt_injection
-            type: category_kb
-          - name: jailbreak_role
-            type: category_kb
-          - name: credential_exfiltration
-            type: category_kb
-          - name: system_prompt_extraction
-            type: category_kb
-        operator: OR
-      tier: 1
-    - modelRefs:
-        - model: local/private-qwen
-          use_reasoning: null
-      name: local_privacy_policy
-      priority: 250
-      rules:
-        conditions:
-          - name: policy_privacy_local_only
-            type: projection
-          - name: privacy_override_active
-            type: projection
-          - name: __tier__:privacy_policy
-            type: category_kb
-        operator: OR
-      tier: 2
-    - modelRefs:
-        - model: cloud/frontier-reasoning
-          use_reasoning: null
-      name: cloud_frontier_reasoning
-      priority: 200
-      rules:
-        conditions:
-          - name: __tier__:frontier_reasoning
-            type: category_kb
-          - name: policy_frontier_reasoning
-            type: projection
-        operator: OR
-      tier: 3
-    - modelRefs:
-        - model: local/private-qwen
-          use_reasoning: null
-      name: local_standard
-      priority: 100
-      rules:
-        conditions:
-          - name: policy_local_reasoning
-            type: projection
-          - name: policy_privacy_cloud_allowed
-            type: projection
-          - name: policy_security_standard
-            type: projection
-        operator: AND
-      tier: 4
+  - name: escalate_72b
+    priority: 200
+    tier: 1
+    modelRefs:
+    - model: cloud/frontier-72b
+      use_reasoning: null
+    rules:
+      operator: OR
+      conditions:
+      - type: category_kb
+        name: __best__:biology
+      - type: category_kb
+        name: __best__:business
+      - type: category_kb
+        name: __best__:computer_science
+      - type: category_kb
+        name: __best__:economics
+      - type: category_kb
+        name: __best__:history
+      - type: category_kb
+        name: __best__:math
+      - type: category_kb
+        name: __best__:other
+      - type: category_kb
+        name: __best__:philosophy
+      - type: category_kb
+        name: __best__:psychology
+  - name: keep_7b
+    priority: 100
+    tier: 2
+    modelRefs:
+    - model: local/small-7b
+      use_reasoning: null
+    rules:
+      operator: AND
+      conditions:
+      - type: projection
+        name: no_escalation
   modelCards:
-    - context_window_size: 262144
-      name: cloud/frontier-reasoning
-    - context_window_size: 131072
-      name: local/private-qwen
+  - name: local/small-7b
+    context_window_size: 131072
+  - name: cloud/frontier-72b
+    context_window_size: 262144
   projections:
-    mappings:
-      - method: threshold_bands
-        name: security_policy_band
-        outputs:
-          - lt: 0.35
-            name: policy_security_standard
-          - gte: 0.35
-            name: policy_security_local_only
-        source: security_risk_score
-      - method: threshold_bands
-        name: privacy_policy_band
-        outputs:
-          - lt: 0.35
-            name: policy_privacy_cloud_allowed
-          - gte: 0.35
-            name: policy_privacy_local_only
-        source: privacy_risk_score
-      - method: threshold_bands
-        name: reasoning_policy_band
-        outputs:
-          - lt: 0.5
-            name: policy_local_reasoning
-          - gte: 0.5
-            name: policy_frontier_reasoning
-        source: reasoning_pressure
-      - method: threshold_bands
-        name: privacy_override_band
-        outputs:
-          - lt: 0.55
-            name: privacy_override_inactive
-          - gte: 0.55
-            name: privacy_override_active
-        source: privacy_contrastive_score
     scores:
-      - inputs:
-          - name: jailbreak_strict
-            type: jailbreak
-            weight: 0.82
-          - name: prompt_injection_markers
-            type: keyword
-            value_source: confidence
-            weight: 0.48
-          - name: exfiltration_markers
-            type: keyword
-            value_source: confidence
-            weight: 0.5
-          - name: override_directive_dense
-            type: structure
-            weight: 0.6
-        method: weighted_sum
-        name: security_risk_score
-      - inputs:
-          - name: pii_strict
-            type: pii
-            weight: 0.92
-          - name: local_only_markers
-            type: keyword
-            value_source: confidence
-            weight: 0.15
-          - name: private_code_markers
-            type: keyword
-            value_source: confidence
-            weight: 0.5
-          - name: pii_request
-            type: embedding
-            value_source: confidence
-            weight: 0.4
-        method: weighted_sum
-        name: privacy_risk_score
-      - inputs:
-          - name: reasoning_request_markers
-            type: keyword
-            value_source: confidence
-            weight: 0.28
-          - name: frontier_reasoning_request
-            type: embedding
-            value_source: confidence
-            weight: 0.48
-        method: weighted_sum
-        name: reasoning_pressure
-      - inputs:
-          - name: __contrastive__
-            type: category_kb
-            value_source: confidence
-            weight: 1
-        method: weighted_sum
-        name: privacy_contrastive_score
+    - name: escalation_pressure
+      method: weighted_sum
+      inputs:
+      - type: category_kb
+        name: __contrastive__
+        value_source: confidence
+        weight: 1.0
+    mappings:
+    - name: escalation_band
+      source: escalation_pressure
+      method: threshold_bands
+      outputs:
+      - name: no_escalation
+        lt: 2.0
+      - name: escalation_signal
+        gte: 2.0
   signals:
     category_kb:
-      - kb_dir: knowledge_bases/
-        name: privacy_classifier
-        security_threshold: 0.25
-        taxonomy_path: knowledge_bases/taxonomy.json
-        threshold: 0.3
-    embeddings:
-      - aggregation_method: max
-        candidates:
-          - Review an HR spreadsheet containing employee phone numbers and addresses.
-        name: pii_request
-        threshold: 0.82
-      - aggregation_method: max
-        candidates:
-          - Compare distributed system architectures with explicit trade-offs.
-        name: frontier_reasoning_request
-        threshold: 0.88
-    jailbreak:
-      - method: classifier
-        name: jailbreak_strict
-        threshold: 0.45
-    keywords:
-      - bm25_threshold: 0.08
-        case_sensitive: false
-        keywords:
-          - ignore previous instructions
-          - bypass safety
-          - reveal the system prompt
-        method: bm25
-        name: prompt_injection_markers
-        operator: OR
-      - bm25_threshold: 0.08
-        case_sensitive: false
-        keywords:
-          - show the system prompt
-          - dump credentials
-          - expose the api key
-        method: bm25
-        name: exfiltration_markers
-        operator: OR
-      - bm25_threshold: 0.18
-        case_sensitive: false
-        keywords:
-          - local processing only
-          - do not send to the cloud
-          - confidential handling
-        method: bm25
-        name: local_only_markers
-        operator: OR
-      - bm25_threshold: 0.08
-        case_sensitive: false
-        keywords:
-          - private repo
-          - proprietary code
-          - internal SDK
-        method: bm25
-        name: private_code_markers
-        operator: OR
-      - bm25_threshold: 0.18
-        case_sensitive: false
-        keywords:
-          - step by step
-          - compare the trade-offs
-          - root cause analysis
-        method: bm25
-        name: reasoning_request_markers
-        operator: OR
-    pii:
-      - name: pii_strict
-        threshold: 0.85
-    structure:
-      - description: Override-oriented instruction language.
-        feature:
-          source:
-            keywords:
-              - ignore
-              - override
-              - bypass
-              - reveal
-            type: keyword_set
-          type: density
-        name: override_directive_dense
-        predicate:
-          gt: 0.06
+    - name: mmlu_classifier
+      kb_dir: /data/semantic-router.bak/deploy/recipes/calibration/knowledge_bases/
+      taxonomy_path: /data/semantic-router.bak/deploy/recipes/calibration/knowledge_bases/taxonomy.json
+      threshold: 0.25
+      security_threshold: 0.2
