@@ -86,6 +86,8 @@ type EvalResponse struct {
 	Metrics           *classification.SignalMetricsCollection `json:"metrics"`                      // Performance and confidence for each signal
 	SignalConfidences map[string]float64                      `json:"signal_confidences,omitempty"` // Real ML confidence scores per signal, e.g. "domain:economics" → 0.81
 	SignalValues      map[string]float64                      `json:"signal_values,omitempty"`      // Raw signal values per signal when exposed, e.g. "structure:many_questions" → 4
+	ProjectionScores  map[string]float64                      `json:"projection_scores,omitempty"`  // Raw weighted-sum projection scores before threshold mapping
+	ProjectionBands   map[string]string                       `json:"projection_bands,omitempty"`   // Band assignment per projection mapping, e.g. "privacy_contrastive" → "high"
 }
 
 // IntentResponse represents the response from intent classification
@@ -226,6 +228,45 @@ func buildMatchedSignals(signals *classification.SignalResults) *MatchedSignals 
 	}
 }
 
+func buildProjectionBands(signals *classification.SignalResults, cfg *config.RouterConfig) map[string]string {
+	if signals == nil || cfg == nil || signals.ProjectionScores == nil {
+		return nil
+	}
+	bands := make(map[string]string)
+	for _, mapping := range cfg.Projections.Mappings {
+		scoreValue, ok := signals.ProjectionScores[mapping.Source]
+		if !ok {
+			continue
+		}
+		for _, output := range mapping.Outputs {
+			if projectionBandMatches(output, scoreValue) {
+				bands[mapping.Source] = output.Name
+				break
+			}
+		}
+	}
+	if len(bands) == 0 {
+		return nil
+	}
+	return bands
+}
+
+func projectionBandMatches(output config.ProjectionMappingOutput, score float64) bool {
+	if output.GT != nil && !(score > *output.GT) {
+		return false
+	}
+	if output.GTE != nil && !(score >= *output.GTE) {
+		return false
+	}
+	if output.LT != nil && !(score < *output.LT) {
+		return false
+	}
+	if output.LTE != nil && !(score <= *output.LTE) {
+		return false
+	}
+	return true
+}
+
 // buildEvalResponse builds an EvalResponse from signal results and decision result
 func (s *ClassificationService) buildEvalResponse(
 	text string,
@@ -237,6 +278,8 @@ func (s *ClassificationService) buildEvalResponse(
 		Metrics:           signals.Metrics,
 		SignalConfidences: signals.SignalConfidences,
 		SignalValues:      signals.SignalValues,
+		ProjectionScores:  signals.ProjectionScores,
+		ProjectionBands:   buildProjectionBands(signals, s.config),
 	}
 
 	matchedSignals := buildMatchedSignals(signals)
