@@ -1,0 +1,304 @@
+version: v0.3
+listeners:
+- address: 0.0.0.0
+  name: http-8899
+  port: 8899
+  timeout: 1200s
+providers:
+  defaults:
+    default_model: Qwen2.5-7B
+    default_reasoning_effort: medium
+  models:
+  - name: Qwen2.5-7B
+    api_format: openai
+    provider_model_id: Qwen2.5-7B
+    backend_refs:
+    - name: local-vllm-7b
+      endpoint: localhost:8091
+      protocol: http
+      type: vllm
+      weight: 1
+      api_key_env: VLLM_API_KEY
+    pricing:
+      prompt_per_1m: 0.04
+      completion_per_1m: 0.1
+      currency: USD
+  - name: Qwen2.5-72B
+    api_format: openai
+    provider_model_id: Qwen2.5-72B
+    backend_refs:
+    - name: vllm-72b
+      endpoint: localhost:8090
+      protocol: http
+      type: vllm
+      weight: 1
+      api_key_env: VLLM_API_KEY
+    pricing:
+      prompt_per_1m: 0.12
+      completion_per_1m: 0.39
+      currency: USD
+global:
+  integrations:
+    looper:
+      endpoint: "http://localhost:8091/v1/chat/completions"
+      timeout_seconds: 120
+      model_endpoints:
+        Qwen2.5-7B: "http://localhost:8091/v1/chat/completions"
+        Qwen2.5-7B: "http://localhost:8091/v1/chat/completions"
+        Qwen2.5-72B: "http://localhost:8090/v1/chat/completions"
+        Qwen2.5-72B: "http://localhost:8090/v1/chat/completions"
+      headers:
+        Authorization: "Bearer 1E59czfahYXNW4mboXgQmVna_b4DxFBgQ0OV65JOJTfaUT5MJ0FTY1SvEafwihLr"
+routing:
+  decisions:
+  # ESCALATE categories (5): always escalate — threshold=1.0 means confidence always < threshold
+  - name: escalate_computer_science
+    priority: 200
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 1.0
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:computer_science
+
+  - name: escalate_other
+    priority: 200
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 1.0
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:other
+
+  - name: escalate_psychology
+    priority: 200
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 1.0
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:psychology
+
+  - name: escalate_biology
+    priority: 200
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 1.0
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:biology
+
+  - name: escalate_philosophy
+    priority: 200
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 1.0
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:philosophy
+
+  # SELECTIVE categories (7): per-category tuned thresholds
+  - name: selective_math
+    priority: 190
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 0.9736
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:math
+
+  - name: selective_business
+    priority: 190
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 0.9793
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:business
+
+  - name: selective_economics
+    priority: 190
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 0.9951
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:economics
+
+  - name: selective_law
+    priority: 190
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 0.9898
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:law
+
+  - name: selective_engineering
+    priority: 190
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 0.9480
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:engineering
+
+  - name: selective_chemistry
+    priority: 190
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 0.9672
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:chemistry
+
+  - name: selective_physics
+    priority: 190
+    tier: 1
+    modelRefs:
+    - model: Qwen2.5-7B
+    - model: Qwen2.5-72B
+    algorithm:
+      type: confidence
+      confidence:
+        confidence_method: avg_logprob
+        threshold: 0.9598
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:physics
+
+  # AVOID categories (2): 7B only, no escalation
+  - name: avoid_health
+    priority: 180
+    tier: 2
+    modelRefs:
+    - model: Qwen2.5-7B
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:health
+
+  - name: avoid_history
+    priority: 180
+    tier: 2
+    modelRefs:
+    - model: Qwen2.5-7B
+    rules:
+      operator: AND
+      conditions:
+      - type: category_kb
+        name: __best__:history
+
+  # Fallback: 7B only
+  - name: fallback_7b
+    priority: 10
+    tier: 3
+    modelRefs:
+    - model: Qwen2.5-7B
+
+  modelCards:
+  - name: Qwen2.5-7B
+    param_size: 7b
+    context_window_size: 32768
+  - name: Qwen2.5-72B
+    param_size: 72b
+    context_window_size: 16384
+
+  signals:
+    category_kb:
+    - name: mmlu_classifier
+      kb_dir: /data/semantic-router.bak/deploy/recipes/calibration/knowledge_bases/
+      taxonomy_path: /data/semantic-router.bak/deploy/recipes/calibration/knowledge_bases/taxonomy.json
+      threshold: 0.25
+      security_threshold: 0.2
