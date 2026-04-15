@@ -87,12 +87,16 @@ class SemanticRouter(BaseRouter):
     ):
         super().__init__(pools, **kwargs)
         if classify_fn is None:
-            # Default: fall through to model_id if set, else first pool
             def classify_fn(req: Request) -> str | None:
                 return req.model_id
 
         self._classify = classify_fn
         self._default = default_pool or self.pool_ids[0]
+        self._live_pools = None
+
+    def set_pools(self, live_pools) -> None:
+        """Inject live pool references for routers that need runtime state."""
+        self._live_pools = live_pools
 
     def route(self, req: Request) -> str | None:
         pool_id = self._classify(req)

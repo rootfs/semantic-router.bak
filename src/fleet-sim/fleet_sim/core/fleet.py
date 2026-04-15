@@ -294,6 +294,93 @@ class FleetSimResult:
             result[f"{pool_id}_slo"] = round(self.slo_compliance(t_slo_ms, pool_id), 4)
         return result
 
+    def token_throughput(self) -> float:
+        """Total tokens processed per second (prefill + decode)."""
+        times = [r.end_time for r in self.completed if r.end_time]
+        if not times:
+            return 0.0
+        elapsed = max(times) - min(r.arrival_time for r in self.completed)
+        total_tokens = sum(r.l_in + r.l_out for r in self.completed)
+        return total_tokens / elapsed if elapsed > 0 else 0.0
+
+    def p95_ttft_ms(self, pool_id: str | None = None) -> float:
+        return self.percentile("ttft", 95, pool_id) * 1000
+
+    def p50_e2e_ms(self, pool_id: str | None = None) -> float:
+        return self.percentile("e2e_latency", 50, pool_id) * 1000
+
+    def p99_e2e_ms(self, pool_id: str | None = None) -> float:
+        return self.percentile("e2e_latency", 99, pool_id) * 1000
+
+    def mean_interference_ratio(self, pool_id: str | None = None) -> float:
+        """Mean cross-phase interference ratio across instances."""
+        ps = [self.pools[pool_id]] if pool_id and pool_id in self.pools else list(self.pools.values())
+        ratios = [
+            inst.interference_ratio()
+            for p in ps
+            for inst in p.instances
+        ]
+        return sum(ratios) / len(ratios) if ratios else 0.0
+
+    def utilisation_variance(self, pool_id: str | None = None) -> float:
+        """Variance in utilisation across instances."""
+        ps = [self.pools[pool_id]] if pool_id and pool_id in self.pools else list(self.pools.values())
+        utils = [inst.utilisation() for p in ps for inst in p.instances]
+        if not utils:
+            return 0.0
+        mean = sum(utils) / len(utils)
+        return sum((u - mean) ** 2 for u in utils) / len(utils)
+
+    def compute_prefix_risk(self) -> dict:
+        """Compute prefix-cache risk metrics from completed requests.
+
+        Measures session migration frequency and repeated-prefill amplification
+        to quantify the KV-cache cost of routing decisions.
+        """
+        from collections import defaultdict
+        sessions: dict[str, list] = defaultdict(list)
+        for r in self.completed:
+            if r.session_id and r.turn_index is not None:
+                sessions[r.session_id].append(r)
+
+        if not sessions:
+            return {
+                "session_count": 0,
+                "session_migration_count": 0,
+                "total_turns": 0,
+                "migration_rate": 0.0,
+                "repeated_prefill_tokens": 0,
+                "repeated_prefill_amplification": 0.0,
+                "worst_case_reprefill": 0,
+            }
+
+        migrations = 0
+        reprefill_tokens = 0
+        worst_reprefill = 0
+        total_turn_pairs = 0
+
+        for sid, reqs in sessions.items():
+            turns = sorted(reqs, key=lambda r: r.turn_index)
+            for prev, curr in zip(turns, turns[1:]):
+                total_turn_pairs += 1
+                if prev.instance_id != curr.instance_id:
+                    migrations += 1
+                    reprefill_tokens += curr.l_in
+                    worst_reprefill = max(worst_reprefill, curr.l_in)
+
+        total_prefill = sum(r.l_in for r in self.completed)
+        amplification = reprefill_tokens / total_prefill if total_prefill > 0 else 0.0
+
+        return {
+            "session_count": len(sessions),
+            "session_migration_count": migrations,
+            "total_turns": sum(len(v) for v in sessions.values()),
+            "migration_rate": migrations / total_turn_pairs if total_turn_pairs > 0 else 0.0,
+            "repeated_prefill_tokens": reprefill_tokens,
+            "repeated_prefill_amplification": amplification,
+            "worst_case_reprefill": worst_reprefill,
+        }
+
     def print_summary(self, t_slo_ms: float = 500.0) -> None:
         d = self.summary(t_slo_ms)
         print(f"\n  Fleet summary  (SLO = {t_slo_ms:.0f}ms P99 TTFT)")

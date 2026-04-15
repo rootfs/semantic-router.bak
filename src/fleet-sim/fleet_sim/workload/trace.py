@@ -208,6 +208,10 @@ class TraceWorkload:
         mid_key = fm["model_id"]
         cat_key = fm.get("category", "category")
         cpx_key = fm.get("complexity", "complexity")
+        stage_key = fm.get("stage", "stage")
+        sid_key = fm.get("session_id", "session_id")
+        tidx_key = fm.get("turn_index", "turn_index")
+        pdt_key = fm.get("projected_decode_tokens", "projected_decode_tokens")
 
         arrivals = []
         for i, row in enumerate(rows):
@@ -220,8 +224,14 @@ class TraceWorkload:
 
             model_id = (row.get(mid_key) or self.default_model_id) or None
 
-            # Use semantic router's category as request category if present
             category = row.get(cat_key, "prose") or "prose"
+
+            stage = row.get(stage_key)
+            session_id = row.get(sid_key)
+            turn_index_raw = row.get(tidx_key)
+            turn_index = int(turn_index_raw) if turn_index_raw is not None else None
+            pdt_raw = row.get(pdt_key)
+            projected_decode = int(float(pdt_raw)) if pdt_raw is not None else None
 
             req = Request(
                 req_id=i,
@@ -230,9 +240,12 @@ class TraceWorkload:
                 l_out=max(1, l_out),
                 category=str(category),
                 model_id=str(model_id) if model_id else None,
+                stage=str(stage) if stage else None,
+                session_id=str(session_id) if session_id else None,
+                turn_index=turn_index,
+                projected_decode_tokens=projected_decode,
             )
 
-            # Attach complexity signal as a custom attribute for analysis
             cpx = row.get(cpx_key)
             if cpx is not None:
                 req._complexity = str(cpx)

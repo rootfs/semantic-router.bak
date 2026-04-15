@@ -5,6 +5,7 @@ from .least_loaded import LeastLoadedRouter
 from .length_based import LengthRouter
 from .model_router import ModelRouter
 from .random_router import RandomRouter
+from .round_robin import RoundRobinRouter
 from .semantic_router import SemanticRouter
 from .spillover import SpilloverRouter
 
@@ -14,6 +15,7 @@ __all__ = [
     "LengthRouter",
     "ModelRouter",
     "RandomRouter",
+    "RoundRobinRouter",
     "SemanticRouter",
     "SpilloverRouter",
 ]

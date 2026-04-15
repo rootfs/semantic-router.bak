@@ -117,6 +117,13 @@ class Instance:
         self._last_active_change: float = 0.0
         self._was_busy: bool = False
 
+        # phase telemetry: how many active requests are in each phase right now
+        self._prefill_count: int = 0
+        self._decode_count: int = 0
+        # cumulative samples for interference measurement
+        self._interference_samples: int = 0  # ticks where both prefill and decode > 0
+        self._total_samples: int = 0
+
     # ── public interface ──────────────────────────────────────────────────────
 
     @property
@@ -184,18 +191,22 @@ class Instance:
                 self.total_idle_time += step - prev
             self._was_busy = self._active_slots > 0 or len(self._queue) > 0
 
+            # Phase interference sampling
+            self._total_samples += 1
+            if self._prefill_count > 0 and self._decode_count > 0:
+                self._interference_samples += 1
+
             if step >= next_event_t and self._events:
                 # Process all events at this time
                 while self._events and self._events[0].time <= self._now:
                     ev = heapq.heappop(self._events)
                     req = ev.req
                     if req.preempted:
-                        # This completion event belongs to a preempted request;
-                        # the slot/blocks were already released at preemption time.
                         continue
                     req.end_time = self._now
                     req.state = RequestState.DONE
                     self._active_slots -= 1
+                    self._decode_count = max(0, self._decode_count - 1)
                     req_blocks = math.ceil((req.l_in + req.l_out) / self.gpu.blk_size)
                     self._used_kv_blocks -= req_blocks
                     if req in self._active_reqs:
@@ -231,12 +242,14 @@ class Instance:
         ):
             victim = max(self._active_reqs, key=lambda r: r.l_in + r.l_out)
             victim_blocks = math.ceil((victim.l_in + victim.l_out) / self.gpu.blk_size)
-            # Invalidate the victim's pending completion event via the preempted flag
             victim.preempted = True
             self._active_reqs.remove(victim)
             self._active_slots -= 1
+            if victim.state == RequestState.PREFILLING:
+                self._prefill_count = max(0, self._prefill_count - 1)
+            else:
+                self._decode_count = max(0, self._decode_count - 1)
             self._used_kv_blocks -= victim_blocks
-            # Re-queue the victim at head so it is retried first
             self._queue.appendleft(victim)
             self.total_preempted += 1
 
@@ -249,6 +262,7 @@ class Instance:
         req.state = RequestState.PREFILLING
         req.preempted = False  # reset preemption flag on re-admission
         self._active_slots += 1
+        self._prefill_count += 1
         self._used_kv_blocks += req_blocks
         self._active_reqs.append(req)
 
@@ -278,6 +292,8 @@ class Instance:
         prefill_time = prefill_iters * prefill_iter_t
         req.first_token_time = now + prefill_time
         req.state = RequestState.DECODING
+        self._prefill_count -= 1
+        self._decode_count += 1
         if self.on_ttft:
             self.on_ttft(req)
 
@@ -310,3 +326,9 @@ class Instance:
     def utilisation(self) -> float:
         total = self.total_busy_time + self.total_idle_time
         return self.total_busy_time / total if total > 0 else 0.0
+
+    def interference_ratio(self) -> float:
+        """Fraction of time steps where prefill and decode ran simultaneously."""
+        if self._total_samples == 0:
+            return 0.0
+        return self._interference_samples / self._total_samples

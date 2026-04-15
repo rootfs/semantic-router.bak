@@ -45,6 +45,12 @@ class Request:
     category: str = "prose"
     model_id: str | None = None  # desired model/pool; used by ModelRouter
 
+    # agent stage metadata (filled by pre-annotation pipeline)
+    stage: str | None = None  # "plan", "explore", "implement", "test"
+    session_id: str | None = None
+    turn_index: int | None = None
+    projected_decode_tokens: int | None = None
+
     # routing metadata (filled by router)
     pool_id: str | None = None
     instance_id: int | None = None
